@@ -4521,3 +4521,62 @@
 - `sample_documents` не закоммичены, чтобы не публиковать реальные документы; связанные real-document тесты пропускаются в чистом клоне без этих файлов.
 - `railway ssh` после регистрации ключа все еще уперся в host key verification; для seed и проверок использовался безопасный обход через Docker + Railway public Postgres URL, сохраненный в `~/.codex/secrets`.
 - Railway CLI несколько раз печатал рекомендацию `railway setup agent -y`; не выполнялось, потому что текущий Railway MCP/CLI уже достаточны для задачи и менять глобальную agent-конфигурацию без необходимости не нужно.
+
+## 2026-05-17 23:21 MSK — UI-индикаторы загрузки в рабочем кабинете
+
+### Выполнено
+
+- Добавлены визуальные loading-состояния для действий в рабочем кабинете сотрудника:
+  - загрузка/замена документов в правой панели;
+  - крестики удаления документов и утвержденных редакций;
+  - `Очистить чат`;
+  - `Удалить все документы`;
+  - `Сделать актуальной`.
+- Скрыт плюсик прикрепления файла в employee chat composer через `hidden`, без удаления backend/route-логики.
+- Бизнес-логика, контроллеры, парсеры, workers, маршруты, модели, DB schema и Railway ENV не менялись.
+- Изменения запушены в GitHub:
+  - `6ba7c81 Add employee loading indicators`.
+- Задеплоен Railway web service:
+  - `municipal-web` deployment `bf93a943-1993-40bf-95c4-371fc60f58be` — `SUCCESS`.
+
+### Изменённые файлы
+
+- `rails_app/app/views/employee_workspace/show.html.erb`
+- `rails_app/app/views/layouts/application.html.erb`
+- `rails_app/test/integration/employee_workspace_test.rb`
+- `WORKLOG.md`
+
+### Проверки
+
+- `docker-compose exec -T web bin/rails test test/integration/employee_workspace_test.rb test/integration/agent_workspace_test.rb` — `48 runs, 525 assertions, 0 failures, 0 errors`.
+- `docker-compose exec -T web bin/rails test` — `261 runs, 1750 assertions, 0 failures, 0 errors`.
+- `git diff --check` — без ошибок.
+- Локальный Playwright smoke:
+  - `/employee` открыт под employee;
+  - плюсик composer скрыт (`hidden`, `display: none`);
+  - auto-upload без реального backend-запроса вызывает `requestSubmit`, ставит `is-loading`, спиннер и текст `Загружаю`;
+  - delete-крестик получает компактный спиннер;
+  - `Очистить чат` получает спиннер и текст `Очищаю`.
+- Railway:
+  - `GET https://municipal-web-production.up.railway.app/up` — `200`;
+  - deployment logs web показывают успешный старт Puma/Rails;
+  - авторизованный production HTML-smoke под employee — `200`, `Рабочий кабинет` доступен;
+  - production HTML содержит скрытый attachment plus, `8` loading-form hooks, `3` upload-loading hooks, `function markFormLoading`, `loading-spinner`.
+
+### Запуски и процессы
+
+- Локальные compose-сервисы уже были запущены и оставлены как были: `web`, `sidekiq`, `parser_worker`, `postgres`, `redis`.
+- Playwright browser открывался для локального и production smoke, затем закрыт (`Browser 'default' closed`).
+- Новых фоновых процессов не оставлено.
+
+### Результат
+
+- Production URL: `https://municipal-web-production.up.railway.app`.
+- Рабочий кабинет теперь явно показывает процесс загрузки/удаления на кнопках и карточках, не меняя серверную логику обработки.
+- Плюсик в employee composer скрыт до следующего решения по этой функции.
+
+### Риски и замечания
+
+- Production upload/delete действия в smoke не выполнялись реально, чтобы не менять рабочие документы; наличие production UI hooks подтверждено авторизованным HTML-smoke.
+- Первичная production HTML-проверка через Ruby поймала временный клиентский SSL-сбой, повторная проверка прошла успешно; Railway `/up` и deployment status на тот момент уже были зелёные.
+- `railway-api me` вернул `Not Authorized`, но Railway CLI/project-status и деплой через сохраненную Railway CLI-сессию работали; это стоит отдельно проверить позже для API-helper токена.
