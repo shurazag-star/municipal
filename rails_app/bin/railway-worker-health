@@ -1,0 +1,25 @@
+#!/usr/bin/env ruby
+
+require "socket"
+
+server = TCPServer.new("0.0.0.0", Integer(ENV.fetch("PORT", "3000")))
+
+loop do
+  socket = server.accept
+  request_line = socket.gets.to_s
+  while (line = socket.gets)
+    break if line == "\r\n"
+  end
+
+  status = request_line.include?(" /up ") ? "200 OK" : "404 Not Found"
+  body = status.start_with?("200") ? "ok" : "not found"
+  socket.write(
+    "HTTP/1.1 #{status}\r\n" \
+    "Content-Type: text/plain\r\n" \
+    "Content-Length: #{body.bytesize}\r\n" \
+    "Connection: close\r\n\r\n" \
+    "#{body}"
+  )
+ensure
+  socket&.close
+end

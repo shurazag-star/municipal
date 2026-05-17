@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${RAILWAY_SERVICE_NAME:-}" == "municipal-worker" || "${PROCESS_TYPE:-}" == "worker" ]]; then
+  printf "ok" > /tmp/up
+  bundle exec sidekiq -c "${SIDEKIQ_CONCURRENCY:-2}" &
+  worker_pid=$!
+  ruby bin/railway-worker-health >/dev/null 2>&1 &
+  health_pid=$!
+
+  trap 'kill "$worker_pid" "$health_pid" 2>/dev/null || true' TERM INT
+  wait "$worker_pid"
+  status=$?
+  kill "$health_pid" 2>/dev/null || true
+  exit "$status"
+fi
+
+bundle exec rails server -b 0.0.0.0 -p "${PORT:-3000}"

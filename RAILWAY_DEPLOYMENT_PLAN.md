@@ -52,6 +52,7 @@ Volumes в целевой схеме не нужны для пользовате
 3. Добавить `railway.toml`:
    - Dockerfile build.
    - `preDeployCommand = "bundle exec rails db:prepare"`.
+   - общий `startCommand = "bin/railway-start"` для web и worker.
    - `healthcheckPath = "/up"`.
    - restart policy `ON_FAILURE`.
 
@@ -67,12 +68,17 @@ Volumes в целевой схеме не нужны для пользовате
    - production image обязан содержать `/parser_worker`;
    - иначе локально парсеры работают только за счет docker-compose volume, а на Railway упадут.
 
-7. Усилить минимальные production-риски перед публичным доступом:
+7. Добавить единый Railway start script:
+   - web запускает Rails на `$PORT`;
+   - worker запускает Sidekiq;
+   - worker дополнительно поднимает легкий `/up` endpoint, чтобы общий Railway healthcheck не валил worker service.
+
+8. Усилить минимальные production-риски перед публичным доступом:
    - запретить сотруднику прямой доступ к админским рабочим экранам;
    - оставить сотруднику только `employee` flow, чат, загрузку документов и утверждение/отклонение сгенерированных редакций;
    - добавить базовую валидацию загружаемых файлов по размеру и расширению.
 
-8. Подготовить production seed:
+9. Подготовить production seed:
    - не использовать демо-пароли `password123` и `1111` в production по умолчанию;
    - создать admin/employee через ENV;
    - demo data загружать только при явном `LOAD_DEMO_DATA=true`.
