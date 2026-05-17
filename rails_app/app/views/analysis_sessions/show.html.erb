@@ -1,0 +1,77 @@
+<div class="page-header">
+  <div>
+    <h1>Сессия анализа</h1>
+    <p>
+      Статус: <%= human_status(@analysis_session.status) %> |
+      Программа: <%= @analysis_session.program_version.municipal_program.name %>
+    </p>
+  </div>
+  <div class="actions-row">
+    <%= button_to "Перезапустить анализ", run_analysis_analysis_session_path(@analysis_session), method: :post %>
+    <% if @change_set %>
+      <%= link_to "Открыть проект изменений", change_set_path(@change_set), class: "button-secondary link-button" %>
+    <% end %>
+    <%= link_to "Рабочее место", root_path, class: "button-secondary link-button" %>
+  </div>
+</div>
+
+<section class="two-col">
+  <div class="card">
+    <h2>Результат</h2>
+    <table>
+      <tbody>
+        <tr>
+          <th>Сопоставлено</th>
+          <td><%= @analysis_session.summary["matched_count"] || 0 %></td>
+        </tr>
+        <tr>
+          <th>Не найдено в программе</th>
+          <td><%= @analysis_session.summary["unmatched_count"] || 0 %></td>
+        </tr>
+        <tr>
+          <th>Нужно уточнение</th>
+          <td><%= @change_set&.change_items&.where(agent_resolution_status: "needs_clarification")&.count || 0 %></td>
+        </tr>
+        <tr>
+          <th>Строк проекта изменений</th>
+          <td><%= @analysis_session.summary["change_items_count"] || 0 %></td>
+        </tr>
+        <tr>
+          <th>Неподдержанные источники</th>
+          <td><%= @analysis_session.summary["unsupported_source_count"] || 0 %></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <% if @change_set %>
+      <div class="actions-row">
+        <%= link_to "Проект изменений ##{@change_set.id}", change_set_path(@change_set), class: "link-button" %>
+      </div>
+    <% else %>
+      <p>Проект изменений не создан: изменения сумм не найдены или источники пока не содержат структурированных данных.</p>
+    <% end %>
+  </div>
+
+  <aside class="card">
+    <h2>Источники</h2>
+    <% if @source_documents.any? %>
+      <ul class="plain-list">
+        <% @source_documents.each do |document| %>
+          <li><%= link_to document.filename, source_document_path(document) %> — <%= human_status(document.status) %></li>
+        <% end %>
+      </ul>
+    <% else %>
+      <p>Источники для анализа не выбраны.</p>
+    <% end %>
+
+    <% unsupported_sources = Array(@analysis_session.summary["unsupported_sources"]) %>
+    <% if unsupported_sources.any? %>
+      <h3>Замечания</h3>
+      <ul class="plain-list">
+        <% unsupported_sources.each do |source| %>
+          <li><%= source["filename"] %>: <%= source["reason"] %></li>
+        <% end %>
+      </ul>
+    <% end %>
+  </aside>
+</section>

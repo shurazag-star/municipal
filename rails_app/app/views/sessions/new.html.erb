@@ -1,0 +1,15 @@
+<section class="login-panel card">
+  <h1>Вход</h1>
+  <p>Рабочее место обновления муниципальной программы</p>
+  <%= form_with url: session_path, class: "stack" do |form| %>
+    <div>
+      <%= form.label :email, "Email" %>
+      <%= form.email_field :email, value: "admin@example.com", autocomplete: "username" %>
+    </div>
+    <div>
+      <%= form.label :password, "Пароль" %>
+      <%= form.password_field :password, value: "password123", autocomplete: "current-password" %>
+    </div>
+    <%= form.submit "Войти" %>
+  <% end %>
+</section>

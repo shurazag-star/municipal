@@ -1,0 +1,20 @@
+<div class="page-header">
+  <div>
+    <h1><%= @program.name %></h1>
+    <p>Период: <%= [@program.period_start_year, @program.period_end_year].compact.join("-").presence || "Не определен" %></p>
+  </div>
+  <%= link_to "Все программы", programs_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="card">
+  <h2>Версии</h2>
+  <% if @program.program_versions.any? %>
+    <ul class="plain-list">
+      <% @program.program_versions.order(version_number: :desc).each do |version| %>
+        <li><%= link_to "Версия #{version.version_number}", program_version_path(version) %> — <%= human_status(version.status) %></li>
+      <% end %>
+    </ul>
+  <% else %>
+    <p>Версии еще не созданы.</p>
+  <% end %>
+</section>

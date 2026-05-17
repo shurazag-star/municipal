@@ -1,0 +1,32 @@
+<div class="page-header">
+  <div>
+    <h1>Муниципальная программа</h1>
+    <p>Активные версии и структура программы.</p>
+  </div>
+  <%= link_to "Документы", source_documents_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="card">
+  <% if @programs.any? %>
+    <table>
+      <thead>
+        <tr>
+          <th>Название</th>
+          <th>Период</th>
+          <th>Версий</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @programs.each do |program| %>
+          <tr>
+            <td><%= link_to program.name, program_path(program) %></td>
+            <td><%= [program.period_start_year, program.period_end_year].compact.join("-").presence || "Не определен" %></td>
+            <td><%= program.program_versions.count %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% else %>
+    <p>Активная программа еще не создана. Загрузите DOCX в разделе документов.</p>
+  <% end %>
+</section>

@@ -1,0 +1,111 @@
+<div class="page-header">
+  <div>
+    <h1>Проект изменений</h1>
+    <p>
+      Статус: <%= human_status(@change_set.status) %> |
+      Строк: <%= @change_items.size %>
+    </p>
+    <p><%= @change_set.summary %></p>
+  </div>
+  <div class="actions-row">
+    <% unless @change_set.applied? %>
+      <%= button_to "Применить", apply_change_set_path(@change_set), method: :post, class: "button-secondary" %>
+    <% end %>
+    <% if @change_set.export_ready? %>
+      <%= link_to "Скачать DOCX", export_docx_change_set_path(@change_set), class: "button-secondary link-button" %>
+    <% end %>
+    <% if @change_set.export_ready? %>
+      <%= link_to "Скачать отчет", export_report_change_set_path(@change_set), class: "button-secondary link-button" %>
+    <% end %>
+    <% if @change_set.export_ready? && @change_set.target_program_version&.generated_validated_status? %>
+      <%= button_to "Сделать актуальной", approve_generated_change_set_path(@change_set), method: :post, class: "button-primary" %>
+      <%= button_to "Отклонить черновик", reject_generated_change_set_path(@change_set), method: :post, class: "button-secondary" %>
+    <% end %>
+    <%= link_to "Все проекты", change_sets_path, class: "button-secondary link-button" %>
+  </div>
+</div>
+
+<% if @change_set.applied? %>
+  <section class="card">
+    <h2>Сформированные материалы</h2>
+    <p>Проект изменений применен: <%= @change_set.applied_at.strftime("%d.%m.%Y %H:%M") if @change_set.applied_at %></p>
+    <% if @change_set.target_program_version %>
+      <p>
+        Новая версия программы:
+        <%= link_to "версия #{@change_set.target_program_version.version_number}", program_version_path(@change_set.target_program_version) %>
+      </p>
+    <% end %>
+    <p>Обновлено значений в Word-документе: <%= @change_set.export_summary.dig("docx_patch", "applied_count") || 0 %></p>
+    <p>Требуют дополнительной проверки: <%= @change_set.export_summary["manual_insert_required_count"] || 0 %></p>
+    <% validation = @change_set.export_summary["post_export_validation"] || {} %>
+    <% if validation.present? %>
+      <% if validation["status"] == "valid" %>
+        <div class="notice">Документ прошел проверку: контрольные суммы сходятся.</div>
+      <% else %>
+        <div class="alert">
+          Word-документ требует проверки.
+          <% Array(validation["errors"]).first(3).each do |error| %>
+            <p><%= error["message"] || error["code"] %></p>
+          <% end %>
+        </div>
+      <% end %>
+    <% end %>
+  </section>
+<% end %>
+
+<section class="card">
+  <h2>Строки изменений</h2>
+  <% if @change_items.any? %>
+    <div class="table-scroll">
+      <table class="structure-table changes-table">
+        <thead>
+          <tr>
+            <th class="object-col">Объект</th>
+            <th class="meta-col">Год</th>
+            <th class="source-col">Источник</th>
+            <th class="money money-col">Было</th>
+            <th class="money money-col">Стало</th>
+            <th class="money money-col">Разница</th>
+            <th class="reference-col">Основание</th>
+            <th class="confirmation-col">Решение агента</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @change_items.each do |item| %>
+            <tr>
+              <td>
+                <strong><%= item.program_node&.name || item.new_value || "Новый объект" %></strong>
+                <p><%= human_status(item.change_type) %></p>
+                <% if item.explanation.present? %>
+                  <p><%= item.explanation %></p>
+                <% end %>
+              </td>
+              <td><%= item.year || "—" %></td>
+              <td class="source-col"><%= human_source_type(item.source_type) %></td>
+              <td class="money"><%= rub_amount(item.old_amount_rub) %></td>
+              <td class="money"><%= rub_amount(item.new_amount_rub) %></td>
+              <td class="money"><%= rub_amount(item.delta_rub) %></td>
+              <td class="reference-col">
+                <%= item.source_reference["filename"] %>
+                <% if item.source_reference["row_number"].present? %>
+                  <p>Строка Excel: <%= item.source_reference["row_number"] %></p>
+                <% end %>
+                <% if item.source_reference["page_number"].present? %>
+                  <p>Страница PDF: <%= item.source_reference["page_number"] %></p>
+                <% end %>
+              </td>
+              <td>
+                <%= confirmation_label(item) %>
+                <% if item.agent_resolution_reason.present? %>
+                  <p><%= item.agent_resolution_reason %></p>
+                <% end %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  <% else %>
+    <p>В проекте изменений нет строк. Такой проект нельзя подтвердить.</p>
+  <% end %>
+</section>

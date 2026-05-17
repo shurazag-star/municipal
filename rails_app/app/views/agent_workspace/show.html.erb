@@ -1,0 +1,184 @@
+<div class="page-header">
+  <div>
+    <h1>Муниципальный программный агент</h1>
+    <p>
+      Муниципалитет: <%= @context.dig("organization", "name") %> |
+      Активная программа: <%= @context.dig("active_program", "name") %>
+    </p>
+  </div>
+  <div class="actions-row">
+    <%= link_to "Настройка агента", agent_settings_path, class: "button-secondary link-button" %>
+    <%= link_to "OpenRouter / модели", admin_openrouter_settings_path, class: "button-secondary link-button" if current_user.admin? %>
+  </div>
+</div>
+
+<section class="workspace-grid">
+  <div class="chat-panel card">
+    <div class="section-header">
+      <h2>Чат с агентом</h2>
+      <%= button_to "Очистить чат", clear_agent_chat_path, method: :post, class: "button-secondary" %>
+    </div>
+
+    <% task_progress = @active_agent_task&.progress_payload || {} %>
+    <div
+      id="agent-progress-panel"
+      class="agent-progress-panel <%= "is-active" if @active_agent_task.present? %>"
+      data-agent-progress
+      data-agent-task-active="<%= @active_agent_task.present? %>"
+      aria-live="polite"
+      aria-hidden="<%= @active_agent_task.present? ? "false" : "true" %>">
+      <span class="agent-progress-pulse" aria-hidden="true"></span>
+      <div class="agent-progress-copy">
+        <strong id="agent-status-text"><%= task_progress["step"].presence || "Агент работает" %></strong>
+        <p id="agent-status-detail"><%= task_progress["detail"].presence || "Готовлю ответ." %></p>
+      </div>
+    </div>
+
+    <div class="chat-messages">
+      <% @messages.each do |message| %>
+        <article class="chat-message chat-message-<%= message.role %>">
+          <div class="chat-role"><%= message.role == "user" ? "Вы" : "Агент" %></div>
+          <% visible_content = message.assistant? ? AgentResponseComposer.scrub_content(message.content) : message.content %>
+          <div class="chat-message-content">
+            <%= message.assistant? ? agent_message_html(visible_content) : simple_format(visible_content) %>
+          </div>
+          <%= render "assistant_cards", message: message if message.assistant? %>
+        </article>
+      <% end %>
+    </div>
+
+    <%= form_with url: agent_messages_path, method: :post, multipart: true, class: "chat-form", data: { agent_form: true, agent_action_label: "Разбираю запрос и готовлю ответ" } do |form| %>
+      <%= form.label :content, "Сообщение агенту", class: "visually-hidden" %>
+      <div class="chat-composer">
+        <button type="button" class="chat-attach-button" title="Прикрепить документ" aria-label="Прикрепить документ" data-chat-attach-button>+</button>
+        <%= file_field_tag :attachment,
+          id: "agent_attachment",
+          class: "chat-file-input",
+          accept: ".pdf,.doc,.docx,.xls,.xlsx,.csv",
+          data: { chat_attachment_input: true } %>
+        <%= form.text_area :content, rows: 1, placeholder: "Напишите агенту..." %>
+        <%= select_tag :document_type,
+          options_for_select([
+            [ "PDF-основание", "pdf_agreement" ],
+            [ "Excel финансистов", "xlsx_finance" ],
+            [ "DOCX-программа", "docx_program" ],
+            [ "Порядок разработки / нормативная база", "pdf_procedure" ],
+            [ "Другое", "other" ]
+          ], "pdf_agreement"),
+          aria: { label: "Тип прикрепленного файла" },
+          class: "chat-document-type" %>
+        <button type="submit" class="chat-send-button" title="Отправить" aria-label="Отправить сообщение">↑</button>
+      </div>
+      <p class="chat-attachment-name" data-chat-attachment-name></p>
+    <% end %>
+
+    <div class="quick-actions">
+      <h3>Быстрые действия</h3>
+      <div class="quick-action-grid">
+        <%= link_to "Загрузить порядок", source_documents_path, class: "button-secondary link-button" %>
+        <%= link_to "Загрузить программу", source_documents_path, class: "button-secondary link-button" %>
+        <%= link_to "Добавить документы изменений", source_documents_path, class: "button-secondary link-button" %>
+        <%= button_to "Провести анализ", agent_messages_path, method: :post, params: { quick_action: "run_analysis" }, form: { data: { agent_form: true, agent_action_label: "Провожу анализ документов" } } %>
+        <%= button_to "Создать проект изменений", agent_messages_path, method: :post, params: { quick_action: "create_change_set" }, form: { data: { agent_form: true, agent_action_label: "Готовлю проект изменений" } } %>
+        <%= button_to "Проверить контрольные суммы", agent_messages_path, method: :post, params: { quick_action: "validate_control_sums" }, form: { data: { agent_form: true, agent_action_label: "Проверяю контрольные суммы" } } %>
+        <%= button_to "Сформировать DOCX", agent_messages_path, method: :post, params: { quick_action: "generate_docx" }, form: { data: { agent_form: true, agent_action_label: "Формирую DOCX и отчет" } } %>
+      </div>
+    </div>
+  </div>
+
+  <aside class="context-panel card">
+    <h2>Контекст агента</h2>
+    <div class="context-list">
+      <div>
+        <h3>Порядок разработки / нормативная база</h3>
+        <% if @context.dig("procedure", "loaded") %>
+          <p><span class="status status-ok">Загружен</span></p>
+          <p><%= @context.dig("procedure", "filename") %></p>
+          <p>Фрагментов базы знаний: <%= @context.dig("procedure", "chunk_count") || @context.dig("procedure", "rule_count") %></p>
+        <% else %>
+          <p><span class="status status-warn">Не загружен</span></p>
+        <% end %>
+      </div>
+
+      <div>
+        <h3>Активная программа</h3>
+        <% if @context.dig("active_program", "loaded") %>
+          <p><%= @context.dig("active_program", "name") %></p>
+          <p>Период: <%= @context.dig("active_program", "period") %></p>
+          <p>Статус: <%= @context.dig("active_program", "status") %></p>
+          <p>Узлов дерева: <%= @context.dig("active_program", "node_count") || 0 %></p>
+          <p>Строк финансирования: <%= @context.dig("active_program", "funding_line_count") || 0 %></p>
+        <% else %>
+          <p><span class="status status-warn">Не загружена</span></p>
+        <% end %>
+      </div>
+
+      <div>
+        <h3>Документы-основания для изменений</h3>
+        <% if @context.fetch("change_sources").any? %>
+          <ul class="plain-list">
+            <% @context.fetch("change_sources").each do |document| %>
+              <li><%= document["filename"] %> — <%= document["status"] %></li>
+            <% end %>
+          </ul>
+        <% else %>
+          <p>Документы-основания еще не загружены.</p>
+        <% end %>
+      </div>
+
+      <div>
+        <h3>Последний анализ</h3>
+        <% if @context.dig("latest_analysis_session", "loaded") %>
+          <p>Статус: <%= @context.dig("latest_analysis_session", "status") %></p>
+          <p>Сопоставлено: <%= @context.dig("latest_analysis_session", "matched_count") %></p>
+          <p>Строк изменений: <%= @context.dig("latest_analysis_session", "change_items_count") %></p>
+        <% else %>
+          <p>Анализ еще не запускался.</p>
+        <% end %>
+      </div>
+
+      <div>
+        <h3>Последний проект изменений</h3>
+        <% if @context.dig("latest_change_set", "loaded") %>
+          <p>Статус: <%= @context.dig("latest_change_set", "status") %></p>
+          <p>Строк: <%= @context.dig("latest_change_set", "items_count") %></p>
+          <p><%= link_to "Открыть проект изменений", change_set_path(@context.dig("latest_change_set", "id")) %></p>
+        <% else %>
+        <p>Проект изменений еще не создан.</p>
+        <% end %>
+      </div>
+
+      <div>
+        <h3>Готовые файлы</h3>
+        <% generated = Array(@context.dig("generated_documents", "documents")) %>
+        <% if generated.any? %>
+          <ul class="plain-list">
+            <% generated.each do |document| %>
+              <li>
+                Проект изменений №<%= document["change_project_id"] %>:
+                <%= link_to "DOCX", document.dig("links", "docx") if document.dig("links", "docx") %>
+                <%= " / " if document.dig("links", "docx") && document.dig("links", "report") %>
+                <%= link_to "отчет", document.dig("links", "report") if document.dig("links", "report") %>
+              </li>
+            <% end %>
+          </ul>
+        <% else %>
+          <p>Появятся после успешной проверки новой редакции.</p>
+        <% end %>
+      </div>
+
+      <div>
+        <h3>Контрольные суммы</h3>
+        <% if @context.dig("reconciliation", "items").present? %>
+          <ul class="plain-list">
+            <% @context.dig("reconciliation", "items").each do |item| %>
+              <li><%= item["year"] %>: <%= item["status"] %></li>
+            <% end %>
+          </ul>
+        <% else %>
+          <p>Сверка появится после разбора DOCX и Excel.</p>
+        <% end %>
+      </div>
+    </div>
+  </aside>
+</section>

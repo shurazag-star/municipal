@@ -1,0 +1,63 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.rails
+    command: bash -lc "bundle exec ruby bin/rails db:prepare && bundle exec ruby bin/rails server -b 0.0.0.0 -p 3000"
+    env_file: .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./rails_app:/rails
+      - ./parser_worker:/parser_worker
+      - ./storage:/rails/storage/shared
+    depends_on:
+      - postgres
+      - redis
+      - parser_worker
+
+  sidekiq:
+    build:
+      context: .
+      dockerfile: Dockerfile.rails
+    command: bash -lc "bundle exec sidekiq -c $${SIDEKIQ_CONCURRENCY:-2}"
+    env_file: .env
+    environment:
+      SIDEKIQ_CONCURRENCY: "2"
+      MALLOC_ARENA_MAX: "2"
+    init: true
+    restart: unless-stopped
+    volumes:
+      - ./rails_app:/rails
+      - ./parser_worker:/parser_worker
+      - ./storage:/rails/storage/shared
+    depends_on:
+      - postgres
+      - redis
+
+  parser_worker:
+    build:
+      context: ./parser_worker
+    command: tail -f /dev/null
+    volumes:
+      - ./parser_worker:/worker
+      - ./storage:/storage
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: municipal_agent_development
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,38 @@
+<% if documents.any? %>
+  <table>
+    <thead>
+      <tr>
+        <th>Файл</th>
+        <th>Статус</th>
+        <th>Дата</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% documents.each do |document| %>
+        <tr>
+          <td><%= link_to document.filename, source_document_path(document) %></td>
+          <td><%= human_status(document.status) %></td>
+          <td><%= l(document.updated_at, format: :short) %></td>
+          <td class="document-actions">
+            <% if local_assigns[:show_make_active] %>
+              <%= button_to "Сделать активной", make_active_source_document_path(document), method: :post, class: "button-secondary" %>
+            <% end %>
+            <%= button_to "×",
+              source_document_path(document),
+              method: :delete,
+              class: "icon-button danger-button",
+              title: "Удалить файл",
+              aria: { label: "Удалить файл #{document.filename}" },
+              form: {
+                class: "compact",
+                data: { turbo_confirm: "Вы уверены, что хотите удалить файл «#{document.filename}»?" }
+              } %>
+          </td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+<% else %>
+  <p><%= empty %></p>
+<% end %>

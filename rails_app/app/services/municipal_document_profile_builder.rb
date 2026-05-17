@@ -1,0 +1,2 @@
+class MunicipalDocumentProfileBuilder < DocumentProfileBuilder
+end

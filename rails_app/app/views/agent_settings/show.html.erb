@@ -1,0 +1,50 @@
+<div class="page-header">
+  <div>
+    <h1>Настройка агента</h1>
+    <p>Настройки применяются только к текущей организации и не содержат секретов OpenRouter.</p>
+  </div>
+  <%= link_to "Назад к рабочему месту", root_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="card">
+  <%= form_with model: @agent_setting, url: agent_settings_path, method: :patch do |form| %>
+    <div>
+      <%= form.label :system_prompt, "Инструкция агента" %>
+      <%= form.text_area :system_prompt, rows: 12 %>
+    </div>
+
+    <div class="form-grid">
+      <div>
+        <%= form.label :primary_model, "Основная модель" %>
+        <%= form.select :primary_model, options_for_select(@model_options, @agent_setting.primary_model) %>
+      </div>
+      <div>
+        <%= form.label :fast_model, "Быстрая модель" %>
+        <%= form.select :fast_model, options_for_select(@model_options, @agent_setting.fast_model) %>
+      </div>
+      <div>
+        <%= form.label :temperature, "Температура" %>
+        <%= form.number_field :temperature, step: "0.01", min: "0", max: "2" %>
+      </div>
+      <div>
+        <%= form.label :match_confidence_threshold, "Порог уверенного сопоставления" %>
+        <%= form.number_field :match_confidence_threshold, step: "0.0001", min: "0", max: "1" %>
+      </div>
+      <div>
+        <%= form.label :money_tolerance_rub, "Денежная погрешность, руб." %>
+        <%= form.number_field :money_tolerance_rub, step: "0.01", min: "0" %>
+      </div>
+    </div>
+
+    <div class="checkbox-grid">
+      <label><%= form.check_box :use_knowledge_base %> Использовать базу знаний</label>
+      <label><%= form.check_box :use_chat_history %> Использовать историю чата</label>
+      <label><%= form.check_box :auto_apply_exact_matches %> Автоматически применять точные совпадения</label>
+      <label><%= form.check_box :show_technical_statuses %> Показывать технические статусы</label>
+    </div>
+
+    <div class="actions-row">
+      <%= form.submit "Сохранить" %>
+    </div>
+  <% end %>
+</section>

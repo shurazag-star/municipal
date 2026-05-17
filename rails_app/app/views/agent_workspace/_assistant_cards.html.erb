@@ -1,0 +1,29 @@
+<% cards = Array(message.metadata["cards"]) %>
+<% if cards.any? %>
+  <div class="assistant-card-list">
+    <% cards.each do |card| %>
+    <% next unless card["type"] == "download" && card["url"].present? %>
+    <div class="assistant-card assistant-download-card">
+        <div>
+          <strong><%= card["label"] %></strong>
+          <% if card["description"].present? %>
+            <p><%= card["description"] %></p>
+          <% end %>
+        </div>
+      <%= link_to card["label"], card["url"], class: "button-secondary link-button" %>
+    </div>
+  <% end %>
+  <% cards.each do |card| %>
+    <% next unless card["type"] == "action" && card["url"].present? %>
+    <div class="assistant-card assistant-action-card">
+      <div>
+        <strong><%= card["label"] %></strong>
+        <% if card["description"].present? %>
+          <p><%= card["description"] %></p>
+        <% end %>
+      </div>
+      <%= button_to card["label"], card["url"], method: (card["method"].presence || :post), class: card["style"] == "primary" ? "button-primary" : "button-secondary" %>
+    </div>
+  <% end %>
+</div>
+<% end %>

@@ -1,0 +1,12 @@
+<%= form_with url: source_documents_path, method: :post, multipart: true do |form| %>
+  <%= form.hidden_field :document_type, value: document_type %>
+  <div class="form-grid">
+    <div>
+      <%= form.label :file, label %>
+      <%= form.file_field :file, accept: accept %>
+    </div>
+    <div class="actions-row">
+      <%= form.submit "Загрузить" %>
+    </div>
+  </div>
+<% end %>

@@ -1,0 +1,32 @@
+<div class="page-header">
+  <div>
+    <h1><%= @source_document.filename %></h1>
+    <p>Тип: <%= @source_document.document_type %> | Статус: <%= human_status(@source_document.status) %></p>
+  </div>
+  <%= link_to "Все документы", source_documents_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="card">
+  <h2>Резюме разбора</h2>
+  <% payload = @source_document.parsed_payload || {} %>
+  <% if @source_document.docx_program? %>
+    <p>Программа: <%= payload.dig("program", "name").presence || "название не определено" %></p>
+    <p>Узлов дерева: <%= Array(payload["nodes"]).size %></p>
+    <p>Период: <%= [payload.dig("program", "period_start_year"), payload.dig("program", "period_end_year")].compact.join("-").presence || "не определен" %></p>
+  <% elsif @source_document.xlsx_finance? %>
+    <p>Лист: <%= payload["sheet_name"].presence || "не определен" %></p>
+    <p>Групп объектов: <%= Array(payload["object_groups"]).size %></p>
+    <p>Годы: <%= Array(payload["years"]).join(", ").presence || "не определены" %></p>
+  <% elsif @source_document.pdf_procedure? %>
+    <p>Фрагментов базы знаний: <%= @source_document.knowledge_chunks.count %></p>
+    <p>Правил: <%= Array(payload["rules"]).size %></p>
+  <% elsif @source_document.pdf_agreement? %>
+    <p>Извлеченных изменений: <%= Array(payload["changes"]).size %></p>
+    <p>Способ чтения: <%= payload["text_extraction_method"] == "ocr" ? "OCR" : "текстовый слой PDF" %></p>
+    <% if Array(payload["warnings"]).any? %>
+      <p>Требует внимания: <%= Array(payload["warnings"]).first %></p>
+    <% end %>
+  <% else %>
+    <p>Файл загружен. Подробные технические данные доступны администратору в журналах.</p>
+  <% end %>
+</section>

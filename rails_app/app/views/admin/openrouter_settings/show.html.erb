@@ -1,0 +1,49 @@
+<div class="page-header">
+  <div>
+    <h1>OpenRouter</h1>
+    <p>Провайдер: OpenRouter. Выбранная модель используется ИИ-агентом для объяснения расхождений.</p>
+  </div>
+  <div>
+    <% if @openrouter_configured %>
+      <span class="status status-ok">Ключ подключен</span>
+    <% else %>
+      <span class="status status-warn">Ключ не задан</span>
+    <% end %>
+  </div>
+</div>
+
+<div class="stack">
+  <section class="card">
+    <div class="page-header">
+      <div>
+        <h2>Модели</h2>
+        <% if @models.any? %>
+          <p>Доступно моделей: <%= @models.size %><% if @models_loaded_at.present? %>, обновлено: <%= l(Time.zone.parse(@models_loaded_at), format: :short) %><% end %></p>
+        <% else %>
+          <p>Нажмите загрузку, чтобы получить актуальный список моделей OpenRouter.</p>
+        <% end %>
+      </div>
+      <%= button_to "Загрузить модели", load_models_admin_openrouter_settings_path, method: :post, disabled: !@openrouter_configured %>
+    </div>
+
+    <% options = @models.map { |model| ["#{model["name"]} — #{model["id"]}", model["id"]] } %>
+    <% options = [[@selected_model, @selected_model]] if options.empty? %>
+
+    <%= form_with url: admin_openrouter_settings_path, method: :patch do |form| %>
+      <div class="form-grid">
+        <div>
+          <%= form.label :openrouter_model_primary, "Основная модель агента" %>
+          <%= form.select :openrouter_model_primary, options_for_select(options, @selected_model) %>
+        </div>
+        <div>
+          <%= form.label :openrouter_model_fast, "Быстрая модель" %>
+          <%= form.select :openrouter_model_fast, options_for_select(options, @selected_fast_model) %>
+        </div>
+      </div>
+      <div class="actions-row">
+        <%= form.submit "Сохранить" %>
+        <%= link_to "Назад к агенту", root_path, class: "button-secondary link-button" %>
+      </div>
+    <% end %>
+  </section>
+</div>

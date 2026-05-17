@@ -1,0 +1,51 @@
+<div class="page-header">
+  <div>
+    <h1>База знаний</h1>
+    <p>Постоянные фрагменты PDF-порядка, которые агент использует как контекст.</p>
+  </div>
+  <%= link_to "Документы", source_documents_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="card stack">
+  <%= form_with url: knowledge_chunks_path, method: :get do |form| %>
+    <%= form.label :q, "Поиск" %>
+    <%= form.text_field :q, value: @query %>
+    <div class="actions-row">
+      <%= form.submit "Найти" %>
+    </div>
+  <% end %>
+
+  <% if @procedure_document %>
+    <div>
+      <h2>Активный порядок</h2>
+      <p><%= @procedure_document.filename %></p>
+      <p>Фрагментов базы знаний: <%= @chunk_count %></p>
+    </div>
+  <% end %>
+
+  <% if @chunks.any? %>
+    <div class="chunk-list">
+      <% @chunks.group_by(&:chunk_type).each do |chunk_type, chunks| %>
+        <section>
+          <h2><%= @chunk_type_labels.fetch(chunk_type, chunk_type) %></h2>
+          <% chunks.each do |chunk| %>
+            <article class="knowledge-chunk">
+              <h3><%= chunk.title.presence || @chunk_type_labels.fetch(chunk.chunk_type, chunk.chunk_type) %></h3>
+              <p>
+                <% if chunk.source_document %>
+                  <%= chunk.source_document.filename %>
+                <% end %>
+                <% if chunk.page_number %>
+                  | страница <%= chunk.page_number %>
+                <% end %>
+              </p>
+              <p><%= chunk.content %></p>
+            </article>
+          <% end %>
+        </section>
+      <% end %>
+    </div>
+  <% else %>
+    <p>Фрагменты пока не извлечены. Загрузите PDF-порядок в разделе документов.</p>
+  <% end %>
+</section>

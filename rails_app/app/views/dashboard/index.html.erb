@@ -1,0 +1,123 @@
+<div class="page-header">
+  <div>
+    <h1>Муниципальный программный агент</h1>
+    <p><%= @organization.name %></p>
+  </div>
+  <div>
+    <% if @openrouter_configured %>
+      <span class="status status-ok">OpenRouter подключен</span>
+    <% else %>
+      <span class="status status-warn">OpenRouter ключ не задан</span>
+    <% end %>
+    <% if current_user.admin? %>
+      <%= link_to "Настройки OpenRouter", admin_openrouter_settings_path, class: "button-secondary link-button" %>
+    <% end %>
+  </div>
+</div>
+
+<section class="stack">
+  <div class="card">
+    <h2>ИИ-агент</h2>
+    <p>Статус: <%= agent_state_label(@latest_documents_by_type, @reconciliations) %></p>
+    <% if @reconciliations.any? %>
+      <%= button_to "Объяснить расхождения через OpenRouter", agent_explain_path, method: :post, disabled: !@openrouter_configured %>
+    <% else %>
+      <p>Для сверки нужны разобранные DOCX и Excel.</p>
+    <% end %>
+    <% if @llm_runs.any? %>
+      <h3>Последнее объяснение</h3>
+      <p><%= @llm_runs.first.output["content"] %></p>
+    <% end %>
+  </div>
+
+  <section>
+    <h2>Загрузка</h2>
+    <div class="grid">
+      <%= render partial: "upload_card", locals: {
+        title: "Муниципальная программа",
+        document_type: "docx_program",
+        accept: ".docx",
+        latest: @latest_documents_by_type["docx_program"]
+      } %>
+      <%= render partial: "upload_card", locals: {
+        title: "Отчет финансистов",
+        document_type: "xlsx_finance",
+        accept: ".xlsx",
+        latest: @latest_documents_by_type["xlsx_finance"]
+      } %>
+      <%= render partial: "upload_card", locals: {
+        title: "Постановление",
+        document_type: "pdf_procedure",
+        accept: ".pdf",
+        latest: @latest_documents_by_type["pdf_procedure"]
+      } %>
+    </div>
+  </section>
+
+  <section class="two-col">
+    <div class="card">
+      <h2>Сверка контрольных сумм</h2>
+      <% if @reconciliations.any? %>
+        <table>
+          <thead>
+            <tr>
+              <th>Год</th>
+              <th>Статус</th>
+              <th class="money">DOCX, руб.</th>
+              <th class="money">Excel, руб.</th>
+              <th class="money">Разница, руб.</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% @reconciliations.each do |item| %>
+              <tr>
+                <td><%= item.year %></td>
+                <td><span class="status <%= item.status == "PROGRAM_TOTAL_DIFF" ? "status-danger" : "status-ok" %>"><%= human_status(item.status) %></span></td>
+                <td class="money"><%= number_with_precision(item.word_amount_rub, precision: 2, delimiter: " ") %></td>
+                <td class="money"><%= number_with_precision(item.external_amount_rub, precision: 2, delimiter: " ") %></td>
+                <td class="money"><%= number_with_precision(item.delta_rub, precision: 2, delimiter: " ") %></td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      <% else %>
+        <p>Сверка появится после разбора DOCX и Excel.</p>
+      <% end %>
+    </div>
+
+    <div class="card">
+      <h2>Программа</h2>
+      <% @programs.each do |program| %>
+        <h3><%= program.name %></h3>
+        <p><%= program.period_start_year %> - <%= program.period_end_year %></p>
+      <% end %>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Последние документы</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Тип</th>
+          <th>Файл</th>
+          <th>Статус</th>
+          <th>Результат</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @source_documents.each do |document| %>
+          <tr>
+            <td><%= document.document_type %></td>
+            <td><%= document.filename %></td>
+            <td><span class="status <%= document_status_class(document.status) %>"><%= document.status %></span></td>
+            <td><%= document_summary(document) %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+    <% if @source_documents.empty? %>
+      <p>Документы еще не загружены.</p>
+    <% end %>
+  </section>
+</section>

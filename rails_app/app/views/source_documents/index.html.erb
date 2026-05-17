@@ -1,0 +1,108 @@
+<div class="page-header">
+  <div>
+    <h1>Документы</h1>
+    <p>Файлы загружаются здесь, а чат-агент использует их как контекст.</p>
+  </div>
+  <%= link_to "Рабочее место", root_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="stack">
+  <div class="card">
+    <h2>Порядок разработки / нормативная база — не источник сумм</h2>
+    <%= render partial: "upload_form", locals: { document_type: "pdf_procedure", accept: ".pdf", label: "Загрузить порядок" } %>
+    <%= render partial: "document_list", locals: { documents: @procedure_documents, empty: "Порядок еще не загружен." } %>
+  </div>
+
+  <div class="card">
+    <h2>Текущая редакция муниципальной программы</h2>
+    <%= render partial: "upload_form", locals: { document_type: "docx_program", accept: ".docx", label: "Загрузить программу" } %>
+    <%= render partial: "document_list", locals: { documents: @program_documents, empty: "DOCX-программа еще не загружена.", show_make_active: true } %>
+  </div>
+
+  <div class="card">
+    <h2>Документы-основания для изменений — Excel финансистов или PDF-соглашения</h2>
+    <div class="form-grid">
+      <%= render partial: "upload_form", locals: { document_type: "xlsx_finance", accept: ".xlsx", label: "Загрузить Excel финансистов" } %>
+      <%= render partial: "upload_form", locals: { document_type: "pdf_agreement", accept: ".pdf", label: "Загрузить PDF-основание" } %>
+    </div>
+    <div class="source-mode-selector">
+      <p>Режим: <strong><%= SourceModeResolver.label(@source_mode.requested_mode) %></strong></p>
+      <% if @source_mode.requested_mode == "auto" && @source_mode.mode != "auto" %>
+        <p>Автоматически выбран расчет: <%= @source_mode.label %></p>
+      <% end %>
+      <div class="actions-row">
+        <% SourceModeResolver::MODE_LABELS.each do |mode, label| %>
+          <%= button_to label,
+            set_source_mode_source_documents_path,
+            method: :post,
+            params: { source_mode: mode },
+            class: @source_mode.requested_mode == mode ? "button-primary" : "button-secondary" %>
+        <% end %>
+      </div>
+    </div>
+    <%= render partial: "document_list", locals: { documents: @change_source_documents, empty: "Документы-основания еще не загружены." } %>
+  </div>
+
+  <div class="card">
+    <h2>Очистка рабочего пространства</h2>
+    <p>Эти действия очищают рабочие данные текущего муниципалитета. Пользователи, организация, OpenRouter и настройки агента сохраняются.</p>
+    <div class="actions-row">
+      <%= button_to "Очистить документы-основания",
+        clear_change_sources_source_documents_path,
+        method: :delete,
+        class: "button-secondary",
+        form: { data: { turbo_confirm: "Очистить Excel/PDF-основания и связанные проекты изменений?" } } %>
+      <%= button_to "Очистить проекты изменений",
+        clear_change_projects_source_documents_path,
+        method: :delete,
+        class: "button-secondary",
+        form: { data: { turbo_confirm: "Очистить анализы, проекты изменений и сформированные материалы?" } } %>
+      <%= button_to "Очистить версии программы",
+        clear_program_versions_source_documents_path,
+        method: :delete,
+        class: "button-secondary",
+        form: { data: { turbo_confirm: "Очистить версии программы и дерево финансирования?" } } %>
+      <%= button_to "Очистить все рабочие данные",
+        clear_workspace_source_documents_path,
+        method: :delete,
+        class: "button-secondary danger-action",
+        form: { data: { turbo_confirm: "Очистить все документы, программы, анализы и проекты? Настройки и пользователи сохранятся." } } %>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Сформированные документы</h2>
+    <% if @generated_documents.any? %>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Проект изменений</th>
+              <th>Дата</th>
+              <th>Проверка</th>
+              <th>Файлы</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% @generated_documents.each do |change_set| %>
+              <tr>
+                <td>№<%= change_set.id %></td>
+                <td><%= (change_set.applied_at || change_set.updated_at).strftime("%d.%m.%Y %H:%M") %></td>
+                <td><%= human_status(change_set.export_summary.dig("post_export_validation", "status")) %></td>
+                <td>
+                  <%= link_to "Скачать DOCX", export_docx_change_set_path(change_set), class: "button-secondary link-button" %>
+                  <%= link_to "Скачать отчет", export_report_change_set_path(change_set), class: "button-secondary link-button" %>
+                  <% if change_set.target_program_version&.generated_validated_status? %>
+                    <%= button_to "Сделать актуальной", approve_generated_change_set_path(change_set), method: :post, class: "button-primary" %>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    <% else %>
+      <p>Новая редакция DOCX и отчет изменений появятся после успешной проверки сформированного документа.</p>
+    <% end %>
+  </div>
+</section>

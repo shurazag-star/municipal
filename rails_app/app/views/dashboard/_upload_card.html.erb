@@ -1,0 +1,18 @@
+<div class="card">
+  <h3><%= title %></h3>
+  <% if latest %>
+    <p>Последний файл: <%= latest.filename %></p>
+    <p><span class="status <%= document_status_class(latest.status) %>"><%= latest.status %></span></p>
+  <% else %>
+    <p>Файл не загружен</p>
+  <% end %>
+
+  <%= form_with url: uploads_path, multipart: true, class: "stack" do |form| %>
+    <%= form.hidden_field :document_type, value: document_type %>
+    <div>
+      <%= form.label :file, "Файл" %>
+      <%= form.file_field :file, accept: accept %>
+    </div>
+    <%= form.submit "Загрузить" %>
+  <% end %>
+</div>

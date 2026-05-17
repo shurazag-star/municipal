@@ -1,0 +1,36 @@
+<div class="page-header">
+  <div>
+    <h1>Проекты изменений</h1>
+    <p>Проект изменений создается после анализа документов. Агент сам сопоставляет строки, а эта страница служит для аудита и объяснений.</p>
+  </div>
+  <%= link_to "Рабочее место", root_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="card">
+  <% if @change_sets.any? %>
+    <table>
+      <thead>
+        <tr>
+          <th>№</th>
+          <th>Статус</th>
+          <th>Строк</th>
+          <th>Нужно уточнить</th>
+          <th>Описание</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @change_sets.each do |change_set| %>
+          <tr>
+            <td><%= link_to change_set.id, change_set_path(change_set) %></td>
+            <td><%= human_status(change_set.status) %></td>
+            <td><%= change_set.change_items.count %></td>
+            <td><%= change_set.change_items.where(agent_resolution_status: "needs_clarification").count %></td>
+            <td><%= change_set.summary %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% else %>
+    <p>Проекты изменений еще не создавались.</p>
+  <% end %>
+</section>

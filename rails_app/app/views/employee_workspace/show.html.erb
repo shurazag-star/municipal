@@ -1,0 +1,163 @@
+<div class="page-header">
+  <div>
+    <h1>Рабочий кабинет</h1>
+    <p>Помощник по подготовке изменений муниципальной программы.</p>
+  </div>
+  <div class="document-actions">
+    <%= button_to "Очистить чат", clear_agent_chat_path, method: :post, class: "button-secondary" %>
+    <%= button_to "Удалить все документы",
+      clear_all_employee_documents_path,
+      method: :delete,
+      class: "danger-button",
+      form: { data: { turbo_confirm: "Удалить все загруженные документы, редакции и проекты изменений?" } } %>
+  </div>
+</div>
+
+<section class="employee-layout">
+  <div class="employee-chat-shell card">
+    <div class="employee-chat-header">
+      <div class="employee-chat-icon" aria-hidden="true">ИИ</div>
+      <div>
+        <h2>ИИ-помощник</h2>
+        <p>Загрузите документы или напишите, что нужно изменить.</p>
+      </div>
+    </div>
+
+    <% task_progress = @active_agent_task&.progress_payload || {} %>
+    <div
+      id="agent-progress-panel"
+      class="agent-progress-panel <%= "is-active" if @active_agent_task.present? %>"
+      data-agent-progress
+      data-agent-task-active="<%= @active_agent_task.present? %>"
+      aria-live="polite"
+      aria-hidden="<%= @active_agent_task.present? ? "false" : "true" %>">
+      <span class="agent-progress-pulse" aria-hidden="true"></span>
+      <div class="agent-progress-copy">
+        <strong id="agent-status-text"><%= task_progress["step"].presence || "Агент работает" %></strong>
+        <p id="agent-status-detail"><%= task_progress["detail"].presence || "Готовлю ответ." %></p>
+      </div>
+    </div>
+
+    <div class="chat-messages">
+      <% @messages.each do |message| %>
+        <article class="chat-message chat-message-<%= message.role %>">
+          <div class="chat-role"><%= message.role == "user" ? "Вы" : "Агент" %></div>
+          <% visible_content = message.assistant? ? AgentResponseComposer.scrub_content(message.content) : message.content %>
+          <div class="chat-message-content">
+            <%= message.assistant? ? agent_message_html(visible_content) : simple_format(visible_content) %>
+          </div>
+          <%= render "agent_workspace/assistant_cards", message: message if message.assistant? %>
+        </article>
+      <% end %>
+    </div>
+
+    <%= form_with url: agent_messages_path, method: :post, multipart: true, class: "employee-chat-form chat-form", data: { agent_form: true, agent_action_label: "Разбираю запрос и готовлю ответ" } do |form| %>
+      <%= form.label :content, "Сообщение агенту", class: "visually-hidden" %>
+      <div class="chat-composer">
+        <button type="button" class="chat-attach-button" title="Прикрепить документ" aria-label="Прикрепить документ" data-chat-attach-button>+</button>
+        <%= file_field_tag :attachment,
+          id: "employee_agent_attachment",
+          class: "chat-file-input",
+          accept: ".pdf,.docx,.xls,.xlsx,.csv",
+          data: { chat_attachment_input: true } %>
+        <%= hidden_field_tag :document_type, "other" %>
+        <%= form.text_area :content, rows: 1, placeholder: "Напишите агенту..." %>
+        <button type="submit" class="chat-send-button" title="Отправить" aria-label="Отправить сообщение">↑</button>
+      </div>
+      <p class="chat-attachment-name" data-chat-attachment-name></p>
+    <% end %>
+  </div>
+
+  <aside class="employee-side-panel">
+    <% @upload_slots.each do |slot| %>
+      <% accepted = slot[:document].present? || slot[:filename].present? %>
+      <% filename = slot[:filename].presence || slot[:document]&.filename %>
+      <div class="employee-upload-card <%= "is-accepted" if accepted %>">
+        <div class="employee-upload-top">
+          <div>
+            <h2 class="employee-upload-title"><%= slot[:title] %></h2>
+            <p class="employee-upload-hint"><%= slot[:hint] %></p>
+          </div>
+          <% if accepted %>
+            <div class="employee-upload-status">
+              <span class="employee-checkmark" aria-label="Документ принят">✓</span>
+              <% if slot[:key] == "program" %>
+                <%= button_to "×",
+                  clear_current_program_employee_documents_path,
+                  method: :delete,
+                  class: "employee-delete-button",
+                  form: {
+                    class: "employee-delete-form",
+                    data: { turbo_confirm: "Удалить актуальную программу из рабочего кабинета?" }
+                  },
+                  title: "Удалить актуальную программу",
+                  aria: { label: "Удалить актуальную программу" } %>
+              <% elsif slot[:document].present? %>
+                <%= button_to "×",
+                  employee_document_path(slot[:document]),
+                  method: :delete,
+                  class: "employee-delete-button",
+                  form: {
+                    class: "employee-delete-form",
+                    data: { turbo_confirm: "Вы уверены, что можно очистить каждое поле?" }
+                  },
+                  title: "Очистить поле",
+                  aria: { label: "Очистить поле #{slot[:title]}" } %>
+              <% end %>
+            </div>
+          <% end %>
+        </div>
+        <% if accepted %>
+          <p class="employee-upload-file"><%= filename %></p>
+        <% end %>
+        <%= form_with url: employee_documents_path, method: :post, multipart: true do %>
+          <%= hidden_field_tag :slot, slot[:key] %>
+          <%= label_tag "employee_upload_#{slot[:key]}", accepted ? "Заменить файл" : "Загрузить файл", class: "employee-upload-action" %>
+          <%= file_field_tag :file,
+            id: "employee_upload_#{slot[:key]}",
+            class: "chat-file-input",
+            accept: slot[:key] == "program" ? ".docx" : ".pdf,.xls,.xlsx,.csv",
+            data: { auto_submit_upload: true } %>
+        <% end %>
+      </div>
+    <% end %>
+
+    <details class="employee-history-panel card">
+      <summary>Утвержденные редакции</summary>
+      <div class="employee-history-list">
+        <% if @approved_change_sets.any? %>
+          <% @approved_change_sets.each do |change_set| %>
+            <div class="employee-history-item">
+              <div class="employee-history-top">
+                <strong>Редакция №<%= change_set.target_program_version&.version_number || change_set.id %></strong>
+                <%= button_to "×",
+                  change_set_path(change_set),
+                  method: :delete,
+                  class: "employee-delete-button",
+                  form: {
+                    class: "employee-delete-form",
+                    data: { turbo_confirm: "Удалить эту утвержденную редакцию из списка?" }
+                  },
+                  title: "Удалить утвержденную редакцию",
+                  aria: { label: "Удалить утвержденную редакцию" } %>
+              </div>
+              <p class="employee-history-meta"><%= l(change_set.updated_at, format: :short) %></p>
+              <p class="employee-history-meta"><%= change_set.summary.presence || "Изменения по муниципальной программе" %></p>
+              <% if change_set.export_ready? %>
+                <div class="employee-history-actions">
+                  <%= link_to "Скачать DOCX", export_docx_change_set_path(change_set), class: "link-button button-secondary" %>
+                  <%= button_to "Сделать актуальной",
+                    approve_generated_change_set_path(change_set),
+                    method: :post,
+                    class: "button-primary employee-history-approve" %>
+                </div>
+              <% end %>
+            </div>
+          <% end %>
+        <% else %>
+          <p class="employee-history-meta">Утвержденных редакций пока нет.</p>
+        <% end %>
+      </div>
+    </details>
+  </aside>
+</section>

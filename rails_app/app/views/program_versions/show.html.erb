@@ -1,0 +1,44 @@
+<div class="page-header">
+  <div>
+    <h1>Версия программы <%= @program_version.version_number %></h1>
+    <p>Статус: <%= human_status(@program_version.status) %></p>
+  </div>
+  <%= link_to "Муниципальная программа", programs_path, class: "button-secondary link-button" %>
+</div>
+
+<section class="card">
+  <h2>Структура</h2>
+  <p>Узлов: <%= @nodes.size %> | строк финансирования: <%= @nodes.sum { |node| node.funding_lines.size } %></p>
+  <% if @nodes.any? %>
+    <div class="table-scroll">
+      <table class="structure-table">
+        <thead>
+          <tr>
+            <th class="meta-col">Тип</th>
+            <th class="meta-col">Номер</th>
+            <th>Название</th>
+            <th class="meta-col">Координаты</th>
+            <th class="count-col">Строки</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% @nodes.each do |node| %>
+            <tr>
+              <td class="meta-col"><%= node.node_type %></td>
+              <td class="meta-col"><%= node.display_number %></td>
+              <td><%= node.name %></td>
+              <td class="meta-col">
+                <% if node.source_table_index || node.source_row_index %>
+                  table <%= node.source_table_index %>, row <%= node.source_row_index %>
+                <% end %>
+              </td>
+              <td class="count-col"><%= node.funding_lines.size %></td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  <% else %>
+    <p>Полное дерево программы будет сохранено после расширения DOCX parser.</p>
+  <% end %>
+</section>
