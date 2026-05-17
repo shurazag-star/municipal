@@ -4363,6 +4363,7 @@
 - Выполнены и запушены коммиты:
   - `c9b768c` — `Prepare municipal agent for Railway deployment`
   - `c75811b` — `Add Railway web and worker start script`
+  - `91ec4cc` — `Document Railway deployment`
 - Подготовлен production Dockerfile для Railway:
   - Ruby/Rails runtime;
   - системные зависимости LibreOffice, Poppler, Tesseract, PostgreSQL client;
