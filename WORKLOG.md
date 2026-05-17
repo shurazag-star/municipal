@@ -4352,3 +4352,171 @@
 ### Риски и замечания
 
 - Папка проекта не является git-репозиторием, поэтому git status/diff недоступны.
+
+## 2026-05-17 21:19 MSK — подготовка GitHub и production deploy на Railway
+
+### Выполненная работа
+
+- Сохранен подробный план выкладки в `RAILWAY_DEPLOYMENT_PLAN.md`.
+- Инициализирован git-репозиторий в `/Users/aleksandrzagrekov/Desktop/Municipal`.
+- Настроен remote `git@github.com:shurazag-star/municipal.git`.
+- Выполнены и запушены коммиты:
+  - `c9b768c` — `Prepare municipal agent for Railway deployment`
+  - `c75811b` — `Add Railway web and worker start script`
+- Подготовлен production Dockerfile для Railway:
+  - Ruby/Rails runtime;
+  - системные зависимости LibreOffice, Poppler, Tesseract, PostgreSQL client;
+  - Python venv для `parser_worker`;
+  - копирование `/parser_worker` внутрь image.
+- Добавлены `.dockerignore`, `railway.toml`, `railway.worker.toml`.
+- Добавлен общий Railway start script:
+  - `rails_app/bin/railway-start`;
+  - `rails_app/bin/railway-worker-health`.
+- Добавлен `/up` health endpoint.
+- Production ActiveStorage переключен на S3-compatible Railway Bucket через `railway_bucket`.
+- Добавлен `aws-sdk-s3`.
+- Production seed переведен на ENV-пароли вместо демо-паролей по умолчанию.
+- Усилены базовые production-защиты:
+  - сотрудник больше не открывает напрямую `/agent_settings`, `/documents`, `/programs`, `/change_sets`, `/knowledge_base`;
+  - добавлена валидация загружаемых файлов по расширению и размеру.
+- Реальные `sample_documents`, локальное `storage`, `.env`, логи, screenshots и Playwright artifacts оставлены вне git и Docker build context.
+- Реальные parser_worker integration-тесты теперь пропускаются в чистом клоне, если `sample_documents` отсутствует.
+
+### Railway
+
+- Создан Railway project: `municipal-agent` (`34b90919-8d67-486d-8f22-ed426d32ed1d`).
+- Созданы сервисы:
+  - `municipal-web`;
+  - `municipal-worker`;
+  - `Postgres`;
+  - `Redis`.
+- Создан Railway Bucket: `municipal-files`.
+- Создан публичный домен: `https://municipal-web-production.up.railway.app`.
+- ENV для `municipal-web` и `municipal-worker` выставлены через Railway CLI:
+  - Rails production env;
+  - `DATABASE_URL` через Postgres reference;
+  - `REDIS_URL` через Redis reference;
+  - S3 bucket credentials;
+  - OpenRouter key из `~/.codex/secrets/municipal-openrouter.env`;
+  - production admin/employee credentials из `~/.codex/secrets/municipal-production.env`.
+- Секреты не выводились в чат и не коммитились.
+- Для удаленного seed Railway SSH потребовал зарегистрированный ключ; публичный ключ `~/.ssh/id_ed25519.pub` зарегистрирован в Railway как `codex-local-municipal`.
+- Из-за host key verification в `railway ssh` seed выполнен через локальный Docker image с Railway `DATABASE_PUBLIC_URL`, сохраненным в `~/.codex/secrets/municipal-railway-postgres-vars.json`.
+
+### Измененные файлы
+
+- `.dockerignore`
+- `.env.example`
+- `.gitignore`
+- `Dockerfile`
+- `RAILWAY_DEPLOYMENT_PLAN.md`
+- `railway.toml`
+- `railway.worker.toml`
+- `rails_app/Gemfile`
+- `rails_app/Gemfile.lock`
+- `rails_app/app/controllers/agent_explanations_controller.rb`
+- `rails_app/app/controllers/agent_messages_controller.rb`
+- `rails_app/app/controllers/agent_settings_controller.rb`
+- `rails_app/app/controllers/analysis_sessions_controller.rb`
+- `rails_app/app/controllers/change_sets_controller.rb`
+- `rails_app/app/controllers/dashboard_controller.rb`
+- `rails_app/app/controllers/documents_controller.rb`
+- `rails_app/app/controllers/employee_documents_controller.rb`
+- `rails_app/app/controllers/imports_controller.rb`
+- `rails_app/app/controllers/knowledge_chunks_controller.rb`
+- `rails_app/app/controllers/program_versions_controller.rb`
+- `rails_app/app/controllers/programs_controller.rb`
+- `rails_app/app/controllers/reconciliations_controller.rb`
+- `rails_app/app/controllers/source_documents_controller.rb`
+- `rails_app/app/controllers/uploads_controller.rb`
+- `rails_app/app/services/source_document_upload_policy.rb`
+- `rails_app/app/views/employee_workspace/show.html.erb`
+- `rails_app/bin/railway-start`
+- `rails_app/bin/railway-worker-health`
+- `rails_app/config/environments/production.rb`
+- `rails_app/config/routes.rb`
+- `rails_app/config/storage.yml`
+- `rails_app/db/seeds.rb`
+- `rails_app/test/integration/agent_workspace_test.rb`
+- `rails_app/test/integration/employee_workspace_test.rb`
+- `rails_app/test/integration/role_access_test.rb`
+- `rails_app/test/integration/source_documents_test.rb`
+- `parser_worker/tests/test_cli_real_documents.py`
+- `parser_worker/tests/test_real_documents_integration.py`
+- `parser_worker/tests/test_report_generation.py`
+- `WORKLOG.md`
+
+### Проверки
+
+- `docker-compose exec -T web bundle install` — lockfile обновлен для `aws-sdk-s3`.
+- `docker-compose exec -T web ruby -c app/services/source_document_upload_policy.rb` — Syntax OK.
+- `docker-compose exec -T web ruby -c app/controllers/agent_messages_controller.rb` — Syntax OK.
+- `docker-compose exec -T web ruby -c db/seeds.rb` — Syntax OK.
+- `docker-compose exec -T web ruby -c config/environments/production.rb` — Syntax OK.
+- `bash -n rails_app/bin/railway-start` — OK.
+- `ruby -c rails_app/bin/railway-worker-health` — Syntax OK.
+- Targeted Rails tests:
+  - `66 runs, 680 assertions, 0 failures, 0 errors`.
+- Full Rails test suite:
+  - `261 runs, 1736 assertions, 0 failures, 0 errors`.
+- Python parser suite:
+  - `54 passed`.
+- Production Docker build:
+  - `docker build -t municipal-railway-test .` — OK.
+- Docker image smoke:
+  - web `/up` на локальном `3100` — `ok`;
+  - worker Sidekiq + `/up` на локальном `3102` — `ok`;
+  - image содержит `/parser_worker`.
+- GitHub push:
+  - `main` запушен в `git@github.com:shurazag-star/municipal.git`.
+- Railway deployments:
+  - `municipal-web` latest redeploy `cb94f8d3-d8f6-4d66-ad63-3891f3bdd3c0` — `SUCCESS`;
+  - `municipal-worker` latest redeploy `81d4faa2-91a1-4720-8c64-448bdb03f3f4` — `SUCCESS`.
+- Railway DB seed:
+  - production DB содержит `2` пользователя и `1` организацию.
+- Public HTTP smoke:
+  - `GET https://municipal-web-production.up.railway.app/up` — `200 ok`;
+  - admin login — `200`, admin workspace доступен;
+  - `GET /agent_settings` под admin — `200`;
+  - employee login — `200`, `/employee` доступен;
+  - `GET /agent_settings` под employee — `403`;
+  - `GET /documents` под employee — `403`.
+- Production upload/worker/S3 smoke:
+  - XLSX загружен через employee cabinet;
+  - `SourceDocument.status` стал `parsed`;
+  - attachment присутствует;
+  - ActiveStorage blob service: `railway_bucket`;
+  - parsed payload содержит `final_totals`, `object_groups`, `program_totals`, `rows`, `sheet_name`.
+- OpenRouter config smoke:
+  - `OpenRouterModelsClient.configured? == true`.
+- Railway logs:
+  - проверены web/worker logs за период деплоя и smoke;
+  - критичных `Completed 500`, `PG::`, `NoMethodError`, `NameError`, S3/OpenRouter failures не обнаружено.
+
+### Запуски и процессы
+
+- Локальные compose-сервисы проекта продолжали работать: `web`, `sidekiq`, `parser_worker`, `postgres`, `redis`.
+- Временные Docker smoke containers запускались и остановлены:
+  - `municipal-railway-smoke`;
+  - `municipal-railway-worker-smoke`.
+- Railway services оставлены запущенными:
+  - `municipal-web`;
+  - `municipal-worker`;
+  - `Postgres`;
+  - `Redis`;
+  - bucket `municipal-files`.
+
+### Результат
+
+- Production версия доступна по адресу: `https://municipal-web-production.up.railway.app`.
+- Работают web, worker, PostgreSQL, Redis, S3-compatible storage, OpenRouter key presence.
+- Admin/employee пользователи созданы через production ENV.
+- Парсер и worker подтверждены реальным загрузочным smoke-тестом на Railway.
+
+### Риски и замечания
+
+- Production credentials не выводились; они сохранены локально в `~/.codex/secrets/municipal-production.env`.
+- Локальная база и локальное `storage` не мигрировались в Railway. Production стартует как чистая среда с seed-пользователями.
+- `sample_documents` не закоммичены, чтобы не публиковать реальные документы; связанные real-document тесты пропускаются в чистом клоне без этих файлов.
+- `railway ssh` после регистрации ключа все еще уперся в host key verification; для seed и проверок использовался безопасный обход через Docker + Railway public Postgres URL, сохраненный в `~/.codex/secrets`.
+- Railway CLI несколько раз печатал рекомендацию `railway setup agent -y`; не выполнялось, потому что текущий Railway MCP/CLI уже достаточны для задачи и менять глобальную agent-конфигурацию без необходимости не нужно.
