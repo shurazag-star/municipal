@@ -4,12 +4,16 @@
     <p>Помощник по подготовке изменений муниципальной программы.</p>
   </div>
   <div class="document-actions">
-    <%= button_to "Очистить чат", clear_agent_chat_path, method: :post, class: "button-secondary" %>
+    <%= button_to "Очистить чат",
+      clear_agent_chat_path,
+      method: :post,
+      class: "button-secondary",
+      form: { data: { loading_form: true, loading_label: "Очищаю" } } %>
     <%= button_to "Удалить все документы",
       clear_all_employee_documents_path,
       method: :delete,
       class: "danger-button",
-      form: { data: { turbo_confirm: "Удалить все загруженные документы, редакции и проекты изменений?" } } %>
+      form: { data: { turbo_confirm: "Удалить все загруженные документы, редакции и проекты изменений?", loading_form: true, loading_label: "Удаляю" } } %>
   </div>
 </div>
 
@@ -54,7 +58,7 @@
     <%= form_with url: agent_messages_path, method: :post, multipart: true, class: "employee-chat-form chat-form", data: { agent_form: true, agent_action_label: "Разбираю запрос и готовлю ответ" } do |form| %>
       <%= form.label :content, "Сообщение агенту", class: "visually-hidden" %>
       <div class="chat-composer">
-        <button type="button" class="chat-attach-button" title="Прикрепить документ" aria-label="Прикрепить документ" data-chat-attach-button>+</button>
+        <button type="button" class="chat-attach-button" title="Прикрепить документ" aria-label="Прикрепить документ" aria-hidden="true" tabindex="-1" data-chat-attach-button hidden>+</button>
         <%= file_field_tag :attachment,
           id: "employee_agent_attachment",
           class: "chat-file-input",
@@ -88,7 +92,7 @@
                   class: "employee-delete-button",
                   form: {
                     class: "employee-delete-form",
-                    data: { turbo_confirm: "Удалить актуальную программу из рабочего кабинета?" }
+                    data: { turbo_confirm: "Удалить актуальную программу из рабочего кабинета?", loading_form: true, loading_label: "Удаляю" }
                   },
                   title: "Удалить актуальную программу",
                   aria: { label: "Удалить актуальную программу" } %>
@@ -99,7 +103,7 @@
                   class: "employee-delete-button",
                   form: {
                     class: "employee-delete-form",
-                    data: { turbo_confirm: "Вы уверены, что можно очистить каждое поле?" }
+                    data: { turbo_confirm: "Вы уверены, что можно очистить каждое поле?", loading_form: true, loading_label: "Удаляю" }
                   },
                   title: "Очистить поле",
                   aria: { label: "Очистить поле #{slot[:title]}" } %>
@@ -110,9 +114,12 @@
         <% if accepted %>
           <p class="employee-upload-file"><%= filename %></p>
         <% end %>
-        <%= form_with url: employee_documents_path, method: :post, multipart: true do %>
+        <%= form_with url: employee_documents_path,
+          method: :post,
+          multipart: true,
+          data: { loading_form: true, upload_loading_form: true, loading_label: accepted ? "Заменяю" : "Загружаю" } do %>
           <%= hidden_field_tag :slot, slot[:key] %>
-          <%= label_tag "employee_upload_#{slot[:key]}", accepted ? "Заменить файл" : "Загрузить файл", class: "employee-upload-action" %>
+          <%= label_tag "employee_upload_#{slot[:key]}", accepted ? "Заменить файл" : "Загрузить файл", class: "employee-upload-action", data: { loading_target: true } %>
           <%= file_field_tag :file,
             id: "employee_upload_#{slot[:key]}",
             class: "chat-file-input",
@@ -136,7 +143,7 @@
                   class: "employee-delete-button",
                   form: {
                     class: "employee-delete-form",
-                    data: { turbo_confirm: "Удалить эту утвержденную редакцию из списка?" }
+                    data: { turbo_confirm: "Удалить эту утвержденную редакцию из списка?", loading_form: true, loading_label: "Удаляю" }
                   },
                   title: "Удалить утвержденную редакцию",
                   aria: { label: "Удалить утвержденную редакцию" } %>
@@ -149,7 +156,8 @@
                   <%= button_to "Сделать актуальной",
                     approve_generated_change_set_path(change_set),
                     method: :post,
-                    class: "button-primary employee-history-approve" %>
+                    class: "button-primary employee-history-approve",
+                    form: { data: { loading_form: true, loading_label: "Активирую" } } %>
                 </div>
               <% end %>
             </div>

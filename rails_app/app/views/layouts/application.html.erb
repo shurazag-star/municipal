@@ -447,6 +447,35 @@
         background: #b8c3cc;
         cursor: not-allowed;
       }
+      @keyframes inline-spin {
+        to { transform: rotate(360deg); }
+      }
+      .loading-spinner {
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        display: inline-flex;
+        flex: 0 0 15px;
+        animation: inline-spin 0.75s linear infinite;
+      }
+      .loading-content {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+      }
+      .is-loading {
+        cursor: wait;
+      }
+      button.is-loading,
+      input[type="submit"].is-loading,
+      .employee-upload-action.is-loading {
+        pointer-events: none;
+        opacity: 0.9;
+      }
       .button-secondary {
         background: #eef3f7;
         color: var(--text);
@@ -672,6 +701,14 @@
       .employee-delete-button:hover {
         background: #f8dada;
       }
+      .employee-delete-button.is-loading {
+        color: var(--danger);
+      }
+      .employee-delete-button .loading-spinner {
+        width: 14px;
+        height: 14px;
+        flex-basis: 14px;
+      }
       .employee-upload-action {
         display: inline-flex;
         align-items: center;
@@ -685,6 +722,13 @@
         font-weight: 700;
       }
       .employee-upload-action:hover { background: var(--primary-dark); }
+      .employee-upload-action.is-loading {
+        background: var(--primary-dark);
+      }
+      .employee-upload-card.is-loading {
+        border-color: #9fc6da;
+        box-shadow: 0 0 0 3px rgba(56, 122, 151, 0.10);
+      }
       .employee-history-panel summary {
         cursor: pointer;
         font-weight: 800;
@@ -944,6 +988,80 @@
         return tag && tag.content;
       }
 
+      function createLoadingSpinner() {
+        var spinner = document.createElement("span");
+        spinner.className = "loading-spinner";
+        spinner.setAttribute("aria-hidden", "true");
+        return spinner;
+      }
+
+      function setLoadingElement(element, label) {
+        if (!element || element.dataset.loadingActive === "true") return;
+
+        var loadingLabel = label || element.dataset.loadingLabel || "Загрузка";
+        element.dataset.loadingActive = "true";
+        element.classList.add("is-loading");
+        element.setAttribute("aria-busy", "true");
+
+        if (element.matches && element.matches("input[type='submit']")) {
+          element.dataset.loadingOriginalValue = element.value;
+          element.value = loadingLabel;
+          element.disabled = true;
+          return;
+        }
+
+        var compact = element.classList.contains("employee-delete-button") || element.textContent.trim() === "×";
+        element.dataset.loadingOriginalText = element.textContent.trim();
+        element.textContent = "";
+
+        var content = document.createElement("span");
+        content.className = "loading-content";
+        content.appendChild(createLoadingSpinner());
+
+        if (!compact) {
+          var text = document.createElement("span");
+          text.textContent = loadingLabel;
+          content.appendChild(text);
+        }
+
+        element.appendChild(content);
+
+        if ("disabled" in element) element.disabled = true;
+      }
+
+      function markFormLoading(form, submitter) {
+        if (!form || form.dataset.loadingActive === "true") return;
+
+        form.dataset.loadingActive = "true";
+        form.classList.add("is-loading");
+        form.setAttribute("aria-busy", "true");
+
+        var target = form.querySelector("[data-loading-target]") || submitter || form.querySelector("button[type='submit'], input[type='submit']");
+        setLoadingElement(target, form.dataset.loadingLabel);
+
+        form.querySelectorAll("button, input[type='submit']").forEach(function(control) {
+          if (control !== target) control.disabled = true;
+        });
+
+        var surface = form.closest(".employee-upload-card, .employee-history-item");
+        if (surface) {
+          surface.classList.add("is-loading");
+          surface.setAttribute("aria-busy", "true");
+        }
+      }
+
+      function setupLoadingForms() {
+        if (document.documentElement.dataset.loadingFormsReady === "true") return;
+        document.documentElement.dataset.loadingFormsReady = "true";
+
+        document.addEventListener("submit", function(event) {
+          var form = event.target.closest("form[data-loading-form]");
+          if (!form || form.matches("[data-agent-form]") || event.defaultPrevented) return;
+
+          markFormLoading(form, event.submitter);
+        });
+      }
+
       function setupAgentForms() {
         if (document.documentElement.dataset.agentFormsReady === "true") return;
         document.documentElement.dataset.agentFormsReady = "true";
@@ -961,7 +1079,10 @@
           var autoUpload = event.target.closest("[data-auto-submit-upload]");
           if (autoUpload) {
             var uploadForm = autoUpload.closest("form");
-            if (uploadForm && autoUpload.files && autoUpload.files[0]) uploadForm.requestSubmit();
+            if (uploadForm && autoUpload.files && autoUpload.files[0]) {
+              markFormLoading(uploadForm, uploadForm.querySelector("[data-loading-target]"));
+              uploadForm.requestSubmit();
+            }
             return;
           }
 
@@ -1033,10 +1154,12 @@
       }
 
       document.addEventListener("DOMContentLoaded", setupConfirmableForms);
+      document.addEventListener("DOMContentLoaded", setupLoadingForms);
       document.addEventListener("DOMContentLoaded", setupAgentForms);
       document.addEventListener("DOMContentLoaded", scrollChatMessagesToBottom);
       document.addEventListener("DOMContentLoaded", setupAgentTaskPolling);
       document.addEventListener("turbo:load", setupConfirmableForms);
+      document.addEventListener("turbo:load", setupLoadingForms);
       document.addEventListener("turbo:load", setupAgentForms);
       document.addEventListener("turbo:load", scrollChatMessagesToBottom);
       document.addEventListener("turbo:load", setupAgentTaskPolling);

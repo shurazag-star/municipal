@@ -17,8 +17,13 @@ class EmployeeWorkspaceTest < ActionDispatch::IntegrationTest
     assert_select "h1", "Рабочий кабинет"
     assert_select ".employee-chat-shell"
     assert_select "form.employee-chat-form[action='#{agent_messages_path}']"
+    assert_select ".employee-chat-form .chat-attach-button[hidden][aria-hidden='true']", "+"
     assert_select "form[action='#{employee_documents_path}'][enctype='multipart/form-data']", count: 3
+    assert_select "form[action='#{employee_documents_path}'][data-loading-form][data-upload-loading-form]", count: 3
+    assert_select "label.employee-upload-action[data-loading-target]", count: 3
+    assert_select "form[action='#{clear_agent_chat_path}'][data-loading-form][data-loading-label='Очищаю'] button", "Очистить чат"
     assert_select "form[action='#{clear_all_employee_documents_path}'] button", "Удалить все документы"
+    assert_select "form[action='#{clear_all_employee_documents_path}'][data-loading-form][data-loading-label='Удаляю']"
     assert_select "input[type='hidden'][name='slot'][value='procedure']"
     assert_select "input[type='hidden'][name='slot'][value='program']"
     assert_select "input[type='hidden'][name='slot'][value='change_source']"
@@ -26,6 +31,8 @@ class EmployeeWorkspaceTest < ActionDispatch::IntegrationTest
     assert_select "a[href='#{agent_settings_path}']", count: 0
     assert_select "a[href='#{source_documents_path}']", count: 0
     assert_select "a[href='#{admin_openrouter_settings_path}']", count: 0
+    assert_select "style", /loading-spinner/
+    assert_select "script", /function markFormLoading/
   end
 
   test "admin root keeps full admin workspace" do
@@ -144,6 +151,7 @@ class EmployeeWorkspaceTest < ActionDispatch::IntegrationTest
     assert_select "style", /employee-chat-shell \.chat-messages[^{]*\{[^}]*overflow-y: auto/m
     assert_select "form[action='#{employee_document_path(procedure)}'] input[name='_method'][value='delete']"
     assert_select "form[data-turbo-confirm='Вы уверены, что можно очистить каждое поле?']", minimum: 2
+    assert_select "form.employee-delete-form[data-loading-form][data-loading-label='Удаляю']", minimum: 3
     assert_select "form[action='#{clear_current_program_employee_documents_path}'][data-turbo-confirm='Удалить актуальную программу из рабочего кабинета?']"
     assert_select ".employee-delete-button", minimum: 3
   end
@@ -290,8 +298,8 @@ class EmployeeWorkspaceTest < ActionDispatch::IntegrationTest
 
     assert_select ".employee-history-item", /Редакция №2/
     assert_select "form[action='#{change_set_path(change_set)}'] input[name='_method'][value='delete']"
-    assert_select "form[data-turbo-confirm='Удалить эту утвержденную редакцию из списка?']"
-    assert_select "form[action='#{approve_generated_change_set_path(change_set)}'] button", /Сделать актуальн/
+    assert_select "form[data-turbo-confirm='Удалить эту утвержденную редакцию из списка?'][data-loading-form][data-loading-label='Удаляю']"
+    assert_select "form[action='#{approve_generated_change_set_path(change_set)}'][data-loading-form][data-loading-label='Активирую'] button", /Сделать актуальн/
 
     assert_difference "ChangeSet.count", -1 do
       delete change_set_path(change_set)
