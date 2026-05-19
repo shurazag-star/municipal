@@ -4649,3 +4649,75 @@
 - Production не изменялся и новый код туда не выкладывался.
 - Реальный smoke выполнен в test-базе локального Docker, не в production БД.
 - Суммы в DOCX хранятся в тысячах рублей с округлением до двух знаков; поэтому при повторном парсинге сгенерированного DOCX копеечные/рублёвые отличия в пределах tolerance ожидаемы.
+
+## 2026-05-19 14:58 MSK — Деплой Excel/DOCX workflow на Railway и production-smoke рабочего кабинета
+
+### Выполнено
+
+- Изменения из коммита `d24c5a1` отправлены в GitHub `main`.
+- Выполнен деплой Railway production:
+  - `municipal-web`: deployment `779b715b-9c25-496f-8fda-7a7dfe43c6a3`, status `SUCCESS`;
+  - `municipal-worker`: deployment `1afb09e3-b253-40cd-a34a-82d292b8c9af`, status `SUCCESS`.
+- В production заново разобраны текущие файлы рабочего кабинета новым кодом:
+  - PDF порядка: `28.10.2025_2489-ПА_Порядок_МП_с_2026.pdf`;
+  - DOCX программы: `2593-ПА от 05.11.2025.docx`;
+  - Excel-основание: `Отчет об исполнении БР по расходам - 2026-05-08T123954.173.xlsx`.
+- Через employee workflow создана новая фоновая задача агента `AgentTask #11` с полным сценарием:
+  - `run_analysis`;
+  - `validate_control_sums`;
+  - `autonomous_resolution`;
+  - `generate_docx`.
+- Агент сформировал production change set `#12` и черновик новой редакции `changeset-12-version-2.docx`.
+
+### Изменённые файлы
+
+- `WORKLOG.md`
+
+### Проверки
+
+- До деплоя:
+  - `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker` — `57 passed`;
+  - полный Rails test suite в Docker — `266 runs, 1762 assertions, 0 failures`;
+  - `git diff --check` — без ошибок;
+  - локальный smoke на production-файлах — DOCX patch `applied_count=646`, `inserted_count=37`, `inserted_rows_count=108`, `skipped_count=0`, post-export validation `valid`.
+- После деплоя:
+  - Railway deployments web/worker — `SUCCESS`;
+  - Playwright public healthcheck `https://municipal-web-production.up.railway.app/up` — `ok`;
+  - production reparse всех трёх документов — статусы `parsed`;
+  - production task `#11` — `succeeded`, workflow steps `run_analysis`, `validate_control_sums`, `autonomous_resolution`, `generate_docx`;
+  - production change set `#12` — `status=applied`, `export_ready=true`;
+  - change items: `155 total`, `155 resolved`, `0 needs_clarification`, `0 excluded`;
+  - generated DOCX attachment — есть;
+  - change report attachment — есть;
+  - export summary: `manual_insert_required_count=0`, `applied_count=646`, `inserted_count=37`, `skipped_count=0`;
+  - post-export validation — `valid`, `validation_errors_count=0`, visual render `valid`;
+  - agent self-check — `passed`;
+  - independent verifier — `passed`;
+  - authenticated HTTP-smoke рабочего кабинета внутри production web container — login `302`, `/employee` `200`, три документа видны, сообщение агента о готовом черновике видно, `Скачать DOCX` и `Сделать актуальной` присутствуют, плюсик composer скрыт.
+- Railway environment logs после workflow:
+  - `AgentTaskJob` выполнен за `84943.58ms`;
+  - S3 download/upload прошли;
+  - ошибок `AgentTaskJob`, `PG::`, `ActiveRecord::`, `Redis::`, `NoMethodError`, traceback не найдено;
+  - присутствуют только Rails warnings `Scoped order is ignored`, не блокирующие workflow.
+
+### Запуски и процессы
+
+- Деплой выполнялся через Railway CLI:
+  - `railway up --service municipal-web --environment production --message "Support budget roster Excel workflow" --ci`;
+  - `railway up --service municipal-worker --environment production --message "Support budget roster Excel workflow worker" --ci`.
+- Production Rails runner выполнялся через SSH в контейнер `municipal-web` с временным known_hosts в `/tmp/municipal_railway_known_hosts`.
+- Production HTTP-smoke выполнялся внутри web-контейнера на `127.0.0.1:$PORT` с заголовком `X-Forwarded-Proto: https`.
+- В production не выполнялось утверждение новой редакции как актуальной; создан только готовый черновик/экспорт.
+- Локальные dev-серверы или compose-сервисы в рамках этого этапа не запускались.
+
+### Результат
+
+- Railway production содержит новый код web и worker.
+- Рабочий кабинет сотрудника проходит полный сценарий на текущих production-файлах: документы распознаются, агент видит Excel как целевую финансовую модель, пересчитывает программу, формирует DOCX и отчет, post-export проверки проходят.
+- Готовая редакция доступна в кабинете как `changeset-12-version-2.docx`; для превращения её в актуальную нужно отдельное бизнес-действие `Сделать актуальной`.
+
+### Риски и замечания
+
+- Первичный внешний `curl` с локальной машины до public Railway domain словил timeout, но Playwright public healthcheck `/up` после этого вернул `ok`, а production HTTP-smoke внутри web container прошёл успешно.
+- `railway ssh` штатно упирался в host key verification; для проверки использован временный `UserKnownHostsFile=/tmp/municipal_railway_known_hosts`, глобальный `~/.ssh/config` не изменялся.
+- В логах есть не критичные Rails warnings `Scoped order is ignored`; workflow они не ломают, но позже можно почистить места с `find_each`/scoped order.
