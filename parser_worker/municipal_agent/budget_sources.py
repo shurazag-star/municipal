@@ -27,6 +27,10 @@ def normalize_budget_source(raw_name: object) -> BudgetSource:
     text = _norm("" if raw_name is None else str(raw_name))
     if not text:
         return BudgetSource.UNKNOWN
+    if text == "900100":
+        return BudgetSource.LOCAL_BUDGET
+    if text in {"900302", "900304"}:
+        return BudgetSource.REGIONAL_BUDGET
     if "федерал" in text:
         return BudgetSource.FEDERAL_BUDGET
     if re.search(r"собственн.*бюджет", text):

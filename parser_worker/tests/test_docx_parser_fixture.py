@@ -64,6 +64,61 @@ def test_docx_parser_extracts_passport_subprograms_and_amounts(tmp_path):
     }
 
 
+def test_docx_parser_ignores_non_financing_source_words_before_passport(tmp_path):
+    path = tmp_path / "program_with_source_word.docx"
+    document = Document()
+    table = document.add_table(rows=1, cols=7)
+    table.rows[0].cells[0].text = "Сроки реализации муниципальной программы"
+    for idx in range(1, 7):
+        table.rows[0].cells[idx].text = "2026-2030"
+
+    description = table.add_row().cells
+    description[0].text = "Краткая характеристика подпрограмм"
+    for idx in range(1, 7):
+        description[idx].text = "Увеличение доли населения из централизованных источников водоснабжения"
+
+    header = table.add_row().cells
+    header[0].text = "Источники финансирования муниципальной программы, в том числе по годам реализации программы (тыс. руб.):"
+    header[1].text = "Всего"
+    header[2].text = "2026"
+    header[3].text = "2027"
+    header[4].text = "2028"
+    header[5].text = "2029"
+    header[6].text = "2030"
+
+    local = table.add_row().cells
+    local[0].text = "Средства бюджета Городского округа Люберцы"
+    local[1].text = "585 651,52"
+    local[2].text = "377 165,32"
+    local[3].text = "208 486,20"
+    local[4].text = "0,00"
+    local[5].text = "0,00"
+    local[6].text = "0,00"
+
+    total = table.add_row().cells
+    total[0].text = "Всего, в том числе по годам:"
+    total[1].text = "2 300 537,01"
+    total[2].text = "1 627 276,41"
+    total[3].text = "673 260,60"
+    total[4].text = "0,00"
+    total[5].text = "0,00"
+    total[6].text = "0,00"
+    document.save(path)
+
+    parsed = parse_docx_program(path)
+
+    assert parsed.passport_totals_by_year == {
+        2026: Decimal("1627276410.00"),
+        2027: Decimal("673260600.00"),
+        2028: Decimal("0.00"),
+        2029: Decimal("0.00"),
+        2030: Decimal("0.00"),
+    }
+    assert parsed.passport_total_cell_coordinates[2027]["cell_index"] == 3
+    assert parsed.passport_source_total_column_amounts[BudgetSource.LOCAL_BUDGET] == Decimal("585651520.00")
+    assert parsed.passport_source_total_cell_coordinates[BudgetSource.LOCAL_BUDGET]["cell_index"] == 1
+
+
 def test_docx_parser_extracts_tree_nodes_and_funding_lines_with_coordinates(tmp_path):
     path = tmp_path / "tree_program.docx"
     document = Document()

@@ -154,12 +154,10 @@ def _extract_passport_amounts(matrix: List[List[str]], parsed: ParsedDocxProgram
     years_by_col: Dict[int, int] = {}
     total_col: Optional[int] = None
     for idx, row in enumerate(matrix):
-        for col, cell in enumerate(row):
-            match = re.search(r"\b(20\d{2})\b", cell.strip())
-            if match:
-                years_by_col[col] = int(match.group(1))
-        if years_by_col and any("источник" in cell.lower() for cell in row):
+        row_years_by_col = _passport_year_columns(row)
+        if row_years_by_col and _looks_like_passport_header(row):
             header_index = idx
+            years_by_col = row_years_by_col
             total_col = _passport_total_column(row, years_by_col)
             break
     if header_index is None:
@@ -214,6 +212,35 @@ def _extract_passport_amounts(matrix: List[List[str]], parsed: ParsedDocxProgram
                     raw_value,
                     source_cell_index=0,
                 )
+
+
+def _passport_year_columns(row: List[str]) -> Dict[int, int]:
+    result: Dict[int, int] = {}
+    seen_years: set[int] = set()
+    for col, cell in enumerate(row):
+        text = _clean_cell(cell).lower()
+        match = re.fullmatch(r"(20\d{2})(?:\s*год)?", text)
+        if not match:
+            continue
+        year = int(match.group(1))
+        if year in seen_years:
+            continue
+        seen_years.add(year)
+        result[col] = year
+    return result
+
+
+def _looks_like_passport_header(row: List[str]) -> bool:
+    return any(_is_passport_source_header_cell(cell) for cell in row)
+
+
+def _is_passport_source_header_cell(cell: object) -> bool:
+    normalized = _normalize_name(cell)
+    if normalized in {"источник", "источники"}:
+        return True
+    if normalized.startswith("источник ") or normalized.startswith("источники "):
+        return "финанс" in normalized or "средств" in normalized or "бюджет" in normalized
+    return False
 
 
 def _passport_total_column(row: List[str], years_by_col: Dict[int, int]) -> Optional[int]:

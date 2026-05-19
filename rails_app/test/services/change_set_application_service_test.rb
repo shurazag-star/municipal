@@ -958,6 +958,87 @@ class ChangeSetApplicationServiceTest < ActiveSupport::TestCase
     assert_equal 0, result.manual_insert_required_count
   end
 
+  test "resolves new object parent from activity-like DOCX object rows" do
+    activity_like_parent = @version.program_nodes.create!(
+      node_type: "object",
+      code: "03.04",
+      display_number: "3.4",
+      name: "Мероприятие 03.04 Строительство объектов водоснабжения",
+      normalized_name: "мероприятие 03 04 строительство объектов водоснабжения",
+      source_table_index: 0,
+      source_row_index: 2,
+      metadata: @parent.metadata.merge("finance_table_index" => 1)
+    )
+    @change_set.change_items.create!(
+      change_type: "new_object",
+      status: "draft",
+      field_name: "object",
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      new_value: "Новый ВЗУ",
+      new_amount_rub: "100000.00",
+      delta_rub: "100000.00",
+      source_reference: {
+        "document_type" => "xlsx_finance",
+        "group_status" => "GROUPED_OBJECT",
+        "match_status" => "MISSING_IN_DOCX",
+        "group_key" => "101030400000000::100001::новый взу",
+        "parent_activity_code" => "101030400000000",
+        "object_code" => "100001",
+        "row_number" => 20
+      },
+      confidence: "0.0"
+    )
+
+    result = ChangeSetApplicationService.new(change_set: @change_set, user: @user).apply!
+
+    target_parent = result.target_program_version.program_nodes.find_by!(name: activity_like_parent.name)
+    target_node = result.target_program_version.program_nodes.find_by!(name: "Новый ВЗУ")
+    assert_equal target_parent, target_node.parent
+    assert_equal BigDecimal("100000.0"), target_node.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
+    assert_equal 0, result.manual_insert_required_count
+  end
+
+  test "falls back to main activity parent when coded activity is absent" do
+    main_activity_like_parent = @version.program_nodes.create!(
+      node_type: "object",
+      code: "03",
+      display_number: "3",
+      name: "Основное мероприятие 03 Строительство объектов водоснабжения",
+      normalized_name: "основное мероприятие 03 строительство объектов водоснабжения",
+      source_table_index: 0,
+      source_row_index: 2,
+      metadata: @parent.metadata.merge("finance_table_index" => 1)
+    )
+    @change_set.change_items.create!(
+      change_type: "new_object",
+      status: "draft",
+      field_name: "object",
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      new_value: "Новый ВЗУ",
+      new_amount_rub: "100000.00",
+      delta_rub: "100000.00",
+      source_reference: {
+        "document_type" => "xlsx_finance",
+        "group_status" => "GROUPED_OBJECT",
+        "match_status" => "MISSING_IN_DOCX",
+        "group_key" => "101030400000000::100001::новый взу",
+        "parent_activity_code" => "101030400000000",
+        "object_code" => "100001",
+        "row_number" => 20
+      },
+      confidence: "0.0"
+    )
+
+    result = ChangeSetApplicationService.new(change_set: @change_set, user: @user).apply!
+
+    target_parent = result.target_program_version.program_nodes.find_by!(name: main_activity_like_parent.name)
+    target_node = result.target_program_version.program_nodes.find_by!(name: "Новый ВЗУ")
+    assert_equal target_parent, target_node.parent
+    assert_equal 0, result.manual_insert_required_count
+  end
+
   private
 
   class FakeInvalidPostExportValidator

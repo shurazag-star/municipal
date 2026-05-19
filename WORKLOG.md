@@ -4580,3 +4580,72 @@
 - Production upload/delete действия в smoke не выполнялись реально, чтобы не менять рабочие документы; наличие production UI hooks подтверждено авторизованным HTML-smoke.
 - Первичная production HTML-проверка через Ruby поймала временный клиентский SSL-сбой, повторная проверка прошла успешно; Railway `/up` и deployment status на тот момент уже были зелёные.
 - `railway-api me` вернул `Not Authorized`, но Railway CLI/project-status и деплой через сохраненную Railway CLI-сессию работали; это стоит отдельно проверить позже для API-helper токена.
+
+## 2026-05-19 14:19 MSK — Расширение Excel/DOCX workflow для нового финансового Excel
+
+### Выполнено
+
+- Расширен Excel-парсер без удаления старой логики:
+  - поддержаны объединенные заголовки Excel;
+  - поддержаны колонки вида `План на 2026 год`, `План на 2027 год`, `План на 2028год`;
+  - поддержаны строковые коды `Тип средств`: `900100` как местный бюджет, `900302`/`900304` как региональный бюджет;
+  - восстановлено имя объекта из общей колонки `Наименование`, когда отдельной колонки имени объекта нет.
+- Исправлено распознавание паспортного финансирования в DOCX:
+  - парсер больше не принимает фразу про `источники водоснабжения` за строку финансового паспорта;
+  - корректно находятся паспортные годы 2026-2030, итоговая колонка и суммы по источникам.
+- Расширено сопоставление новых объектов Excel с деревом DOCX:
+  - учитываются DOCX-строки мероприятий, которые парсер хранит как `object`;
+  - используется `finance_table_index`, когда у строки нет явного родителя-подпрограммы;
+  - добавлен fallback к основному мероприятию, если код конкретного мероприятия из Excel отсутствует в Word.
+- Уточнена post-export проверка для вставленных объектов, которые после повторного парсинга DOCX классифицируются как `activity`.
+
+### Изменённые файлы
+
+- `parser_worker/municipal_agent/budget_sources.py`
+- `parser_worker/municipal_agent/docx_parser.py`
+- `parser_worker/municipal_agent/excel_parser.py`
+- `parser_worker/tests/test_docx_parser_fixture.py`
+- `parser_worker/tests/test_excel_parser_fixture.py`
+- `parser_worker/tests/test_money_and_sources.py`
+- `rails_app/app/services/agent_autonomous_resolver.rb`
+- `rails_app/app/services/change_set_application_service.rb`
+- `rails_app/app/services/external_source_matcher.rb`
+- `rails_app/app/services/post_export_docx_validator.rb`
+- `rails_app/test/services/agent_autonomous_resolver_test.rb`
+- `rails_app/test/services/change_set_application_service_test.rb`
+- `rails_app/test/services/post_export_docx_validator_test.rb`
+
+### Проверки
+
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker/tests/test_docx_parser_fixture.py parser_worker/tests/test_excel_parser_fixture.py parser_worker/tests/test_money_and_sources.py parser_worker/tests/test_universal_budget_sources.py` — `16 passed`.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker` — `57 passed`.
+- `docker-compose run --rm ... bin/rails test test/services/agent_autonomous_resolver_test.rb test/services/change_set_application_service_test.rb test/services/external_source_matcher_test.rb test/services/analysis_session_runner_test.rb test/services/post_export_docx_validator_test.rb test/services/docx_patch_plan_builder_test.rb` — `68 runs, 267 assertions, 0 failures`.
+- `docker-compose run --rm ... bin/rails test` — `266 runs, 1762 assertions, 0 failures`.
+- `git diff --check` — без ошибок.
+- Реальный smoke на production-файлах из `/tmp/municipal-prod-docs`:
+  - исходный DOCX: паспортные итоги распознаны за 2026-2030;
+  - Excel: итог программы распознан как 2026 `3021155271.07`, 2027 `1926156034.00`, 2028 `4347358040.00`;
+  - анализ: `matched_count=10`, `unmatched_count=37`, `change_items_count=155`;
+  - автономное разрешение: `resolved_count=155`, `needs_clarification_count=0`;
+  - генерация DOCX: `status=applied`, `export_ready=true`;
+  - DOCX patch: `applied_count=646`, `inserted_count=37`, `inserted_rows_count=108`, `skipped_count=0`;
+  - post-export validation: `valid`, object errors `0`, aggregate errors `0`, visual render `valid`.
+- Сформированный smoke-DOCX сохранён вне репозитория: `/tmp/municipal-generated-latest-after-passport.docx`.
+
+### Запуски и процессы
+
+- Для проверки использовались локальные compose-сервисы `postgres`, `redis`, `parser_worker`.
+- После проверок остановлены `postgres`, `redis`, `parser_worker`.
+- `sidekiq` был в compose до задачи и остался в прежнем restart-состоянии; в рамках этой задачи он не запускался и не останавливался.
+
+### Результат
+
+- Локальная цепочка `DOCX + новый Excel -> анализ -> сопоставление -> генерация новой редакции DOCX -> валидация` проходит на реальных файлах.
+- Прежние тесты парсера и Rails workflow проходят.
+- Изменения пока локальные, без коммита, пуша и деплоя на Railway.
+
+### Риски и замечания
+
+- Production не изменялся и новый код туда не выкладывался.
+- Реальный smoke выполнен в test-базе локального Docker, не в production БД.
+- Суммы в DOCX хранятся в тысячах рублей с округлением до двух знаков; поэтому при повторном парсинге сгенерированного DOCX копеечные/рублёвые отличия в пределах tolerance ожидаемы.

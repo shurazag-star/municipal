@@ -15,6 +15,7 @@ from .row_classification import ExcelRowType, classify_excel_row
 
 
 FundingKey = Tuple[int, BudgetSource]
+AmountColumn = Tuple[int, Optional[BudgetSource], bool]
 
 
 @dataclass
@@ -96,10 +97,10 @@ def parse_xlsx_finance_report(path: str | Path) -> ParsedExcelReport:
     final_totals: Dict[int, Decimal] = {}
 
     for row_cells in worksheet.iter_rows(min_row=data_start_row, values_only=False):
-        values = {header: row_cells[idx].value for idx, header in headers.items()}
+        values = _row_values(row_cells, headers)
         normalized = _normalize_row_values(values)
         row_type = classify_excel_row(normalized)
-        funding = _extract_funding(row_cells, amount_columns)
+        funding = _extract_funding(row_cells, amount_columns, row_source=_row_budget_source(values))
         finance_row = ExcelFinanceRow(
             row_number=row_cells[0].row,
             row_type=row_type,
@@ -151,7 +152,7 @@ def _detect_header(worksheet) -> Tuple[int, Dict[int, str]]:
                 parts = []
                 for header_row in header_rows:
                     if idx < len(header_row):
-                        value = header_row[idx].value
+                        value = _merged_cell_value(header_row[idx])
                         if value not in (None, ""):
                             parts.append(str(value).replace("_x000D_", " ").replace("\n", " ").strip())
                 if parts:
@@ -164,13 +165,41 @@ def _is_header_number(text: str) -> bool:
     return str(text).strip().isdigit()
 
 
+def _merged_cell_value(cell):
+    if cell.value not in (None, ""):
+        return cell.value
+    worksheet = cell.parent
+    for merged_range in worksheet.merged_cells.ranges:
+        if cell.coordinate in merged_range:
+            return worksheet.cell(merged_range.min_row, merged_range.min_col).value
+    return cell.value
+
+
+def _row_values(row_cells, headers: Mapping[int, str]) -> Dict[str, object]:
+    values: Dict[str, object] = {}
+    for idx, header in headers.items():
+        value = row_cells[idx].value
+        if header not in values or _blank(values[header]):
+            values[header] = value
+    return values
+
+
+def _blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 def _normalize_row_values(values: Mapping[str, object]) -> Dict[str, str]:
+    name = _lookup_name(values)
+    object_code = _lookup_object_code(values)
+    object_name = _lookup_object_name(values)
+    if not object_name and object_code:
+        object_name = name
     return {
-        "name": _lookup_name(values),
+        "name": name,
         "program_code": _lookup_program_code(values),
         "measure_code": _lookup_measure_code(values),
-        "object_code": _lookup_object_code(values),
-        "object_name": _lookup_object_name(values),
+        "object_code": object_code,
+        "object_name": object_name,
     }
 
 
@@ -205,8 +234,17 @@ def _lookup_object_name(values: Mapping[str, object]) -> str:
     return _lookup_by_predicate(values, lambda header: "наименование" in header and "объект" in header)
 
 
-def _detect_amount_columns(headers: Mapping[int, str]) -> Dict[int, Tuple[int, Optional[BudgetSource]]]:
-    columns: Dict[int, Tuple[int, Optional[BudgetSource]]] = {}
+def _lookup_budget_source(values: Mapping[str, object]) -> str:
+    return _lookup_by_predicate(values, lambda header: "тип средств" in header or "источник" in header)
+
+
+def _row_budget_source(values: Mapping[str, object]) -> BudgetSource:
+    source = normalize_budget_source(_lookup_budget_source(values))
+    return source
+
+
+def _detect_amount_columns(headers: Mapping[int, str]) -> Dict[int, AmountColumn]:
+    columns: Dict[int, AmountColumn] = {}
     current_year: Optional[int] = None
     in_plan_columns = True
     for idx, header in sorted(headers.items()):
@@ -220,31 +258,44 @@ def _detect_amount_columns(headers: Mapping[int, str]) -> Dict[int, Tuple[int, O
             current_year = int(match.group(1))
         source = normalize_budget_source(text)
         if match and "всего" in text:
-            columns[idx] = (current_year, None)
+            columns[idx] = (current_year, None, False)
+        elif match and _looks_like_plan_total_header(text):
+            columns[idx] = (current_year, None, True)
         elif current_year is not None and source is not BudgetSource.UNKNOWN:
-            columns[idx] = (current_year, source)
+            columns[idx] = (current_year, source, False)
     return columns
 
 
-def _extract_funding(row_cells, amount_columns: Mapping[int, Tuple[int, Optional[BudgetSource]]]) -> Dict[FundingKey, Decimal]:
+def _looks_like_plan_total_header(text: str) -> bool:
+    return "план на" in text or re.search(r"\bплан\b", text)
+
+
+def _extract_funding(
+    row_cells,
+    amount_columns: Mapping[int, AmountColumn],
+    row_source: BudgetSource = BudgetSource.UNKNOWN,
+) -> Dict[FundingKey, Decimal]:
     specific: Dict[FundingKey, Decimal] = {}
     totals: Dict[int, Decimal] = {}
-    for idx, (year, source) in amount_columns.items():
+    for idx, (year, source, row_source_required) in amount_columns.items():
         amount = parse_money_to_rub(row_cells[idx].value)
         if amount == Decimal("0.00"):
             continue
-        if source is None:
+        if source is None and row_source is BudgetSource.UNKNOWN:
+            if row_source_required:
+                continue
             totals[year] = amount
         else:
+            source = row_source if source is None else source
             specific[(year, source)] = amount
     if specific:
         return specific
     return {(year, BudgetSource.UNKNOWN): amount for year, amount in totals.items()}
 
 
-def _extract_total_columns(row_cells, amount_columns: Mapping[int, Tuple[int, Optional[BudgetSource]]]) -> Dict[int, Decimal]:
+def _extract_total_columns(row_cells, amount_columns: Mapping[int, AmountColumn]) -> Dict[int, Decimal]:
     totals: Dict[int, Decimal] = {}
-    for idx, (year, source) in amount_columns.items():
+    for idx, (year, source, _row_source_required) in amount_columns.items():
         if source is None:
             amount = parse_money_to_rub(row_cells[idx].value)
             if amount != Decimal("0.00"):

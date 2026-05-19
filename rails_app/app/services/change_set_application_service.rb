@@ -1070,18 +1070,57 @@ class ChangeSetApplicationService
     parsed = parse_external_parent_code(reference["parent_activity_code"].presence || reference["group_key"])
     return nil unless parsed
 
-    candidates = target_version.program_nodes.where(node_type: "activity")
-    candidates = candidates.where(code: parsed[:activity_code]) if parsed[:activity_code].present?
-    candidates.detect { |node| parent_activity_matches?(node, parsed) } ||
-      (parsed[:activity_code].present? && candidates.one? ? candidates.first : nil)
+    parent_candidates(target_version.program_nodes, parsed).first
+  end
+
+  def parent_candidates(scope, parsed)
+    activity_candidates = scoped_parent_candidates(scope, parsed[:activity_code])
+    activity_matches = activity_candidates.select { |node| parent_activity_matches?(node, parsed) }
+    return activity_matches if activity_matches.any?
+    return activity_candidates if parsed[:activity_code].present? && activity_candidates.one?
+
+    main_candidates = scoped_parent_candidates(scope, parsed[:main_activity_code])
+    main_matches = main_candidates.select { |node| parent_main_activity_matches?(node, parsed) }
+    return main_matches if main_matches.any?
+    return main_candidates if parsed[:main_activity_code].present? && main_candidates.one?
+
+    []
+  end
+
+  def scoped_parent_candidates(scope, code)
+    candidates = scope.where(node_type: %w[activity object])
+    candidates = candidates.where(code: code) if code.present?
+    candidates.to_a.select { |node| activity_parent_candidate?(node) }
   end
 
   def parent_activity_matches?(node, parsed)
-    subprogram = ancestor_of_type(node, "subprogram")
-    subprogram_matches = parsed[:subprogram_display].blank? || subprogram&.display_number.to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = parsed[:subprogram_display].blank? || node_subprogram_display(node).to_s == parsed[:subprogram_display].to_s
     activity_matches = node.code.to_s == parsed[:activity_code].to_s || node.display_number.to_s == parsed[:activity_display].to_s
 
     subprogram_matches && activity_matches
+  end
+
+  def parent_main_activity_matches?(node, parsed)
+    subprogram_matches = parsed[:subprogram_display].blank? || node_subprogram_display(node).to_s == parsed[:subprogram_display].to_s
+    main_matches = node.code.to_s == parsed[:main_activity_code].to_s || node.display_number.to_s == parsed[:main_activity_display].to_s
+
+    subprogram_matches && main_matches
+  end
+
+  def activity_parent_candidate?(node)
+    node.node_type == "activity" || activity_like_object_node?(node)
+  end
+
+  def activity_like_object_node?(node)
+    node.node_type == "object" &&
+      node.code.present? &&
+      normalize_name(node.name).include?("мероприятие") &&
+      !FinancialNodeClassifier.summary_row?(node)
+  end
+
+  def node_subprogram_display(node)
+    ancestor_of_type(node, "subprogram")&.display_number.presence ||
+      node.metadata.to_h["finance_table_index"].presence&.to_s
   end
 
   def parse_external_parent_code(raw_code)
@@ -1095,6 +1134,8 @@ class ChangeSetApplicationService
 
     {
       subprogram_display: subprogram.to_s,
+      main_activity_code: format("%02d", main_activity),
+      main_activity_display: main_activity.to_s,
       activity_code: format("%02d.%02d", main_activity, activity),
       activity_display: "#{main_activity}.#{activity}"
     }

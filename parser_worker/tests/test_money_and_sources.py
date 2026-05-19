@@ -19,7 +19,12 @@ def test_normalizes_known_budget_source_aliases():
     assert normalize_budget_source("местный бюджет") == BudgetSource.LOCAL_BUDGET
 
 
+def test_normalizes_budget_roster_type_codes():
+    assert normalize_budget_source("900100") == BudgetSource.LOCAL_BUDGET
+    assert normalize_budget_source("900302") == BudgetSource.REGIONAL_BUDGET
+    assert normalize_budget_source("900304") == BudgetSource.REGIONAL_BUDGET
+
+
 def test_normalizes_object_names_for_matching():
     raw = "Строительство ВЗУ\u00a0г.о. Шатура, р.п. Черусти, в том числе ПИР и ТП"
     assert normalize_name(raw) == "строительство взу городской округ шатура рабочий поселок черусти в т.ч. пир и тп"
-

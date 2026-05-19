@@ -275,9 +275,9 @@ class ExternalSourceMatcher
     parsed = parse_external_parent_code(group["parent_activity_code"])
     return nil unless parsed
 
-    candidates = @program_version.program_nodes.where(node_type: "activity")
+    candidates = @program_version.program_nodes.where(node_type: %w[activity object])
     candidates = candidates.where(code: parsed[:activity_code]) if parsed[:activity_code].present?
-    candidates = candidates.to_a
+    candidates = candidates.to_a.select { |node| activity_parent_candidate?(node) }
     candidates = candidates.select { |node| parent_activity_matches?(node, parsed) }.presence ||
       candidates.select { |node| parent_amounts_match?(node, group.fetch("funding_entries")) }
     matches = candidates.select { |node| parent_amounts_match?(node, group.fetch("funding_entries")) }
@@ -287,8 +287,7 @@ class ExternalSourceMatcher
   end
 
   def parent_activity_matches?(node, parsed)
-    subprogram = ancestor_of_type(node, "subprogram")
-    subprogram_matches = parsed[:subprogram_display].blank? || subprogram&.display_number.to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = parsed[:subprogram_display].blank? || node_subprogram_display(node).to_s == parsed[:subprogram_display].to_s
     activity_matches = node.code.to_s == parsed[:activity_code].to_s || node.display_number.to_s == parsed[:activity_display].to_s
 
     subprogram_matches && activity_matches
@@ -537,14 +536,30 @@ class ExternalSourceMatcher
   end
 
   def node_matches_parent_activity?(node, parsed)
-    activity = node.node_type == "activity" ? node : ancestor_of_type(node, "activity")
+    activity = activity_parent_candidate?(node) ? node : ancestor_of_type(node, "activity")
     return false unless activity
 
     subprogram = ancestor_of_type(activity, "subprogram")
-    subprogram_matches = subprogram&.display_number.to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = node_subprogram_display(activity).to_s == parsed[:subprogram_display].to_s
     activity_matches = activity.code.to_s == parsed[:activity_code].to_s ||
       normalize_name(activity.name).include?(normalize_name(parsed[:activity_code]))
     subprogram_matches && activity_matches
+  end
+
+  def activity_parent_candidate?(node)
+    node.node_type == "activity" || activity_like_object_node?(node)
+  end
+
+  def activity_like_object_node?(node)
+    node.node_type == "object" &&
+      node.code.present? &&
+      normalize_name(node.name).include?("мероприятие") &&
+      !FinancialNodeClassifier.summary_row?(node)
+  end
+
+  def node_subprogram_display(node)
+    ancestor_of_type(node, "subprogram")&.display_number.presence ||
+      node.metadata.to_h["finance_table_index"].presence&.to_s
   end
 
   def ancestor_of_type(node, node_type)

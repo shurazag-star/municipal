@@ -250,6 +250,77 @@ class AgentAutonomousResolverTest < ActiveSupport::TestCase
     assert_equal "residual_parent_code", item.agent_resolution_evidence["resolution_pass"]
   end
 
+  test "resolves coded Excel new objects under activity-like DOCX object rows" do
+    @version.program_nodes.create!(
+      node_type: "object",
+      code: "03.04",
+      display_number: "3.4",
+      name: "Мероприятие 03.04 Строительство объектов водоснабжения",
+      metadata: { "finance_table_index" => 1 }
+    )
+    item = @change_set.change_items.create!(
+      change_type: "new_object",
+      status: "draft",
+      field_name: "object",
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      new_value: "Новый ВЗУ",
+      new_amount_rub: "100000.00",
+      delta_rub: "100000.00",
+      source_reference: {
+        "document_type" => "xlsx_finance",
+        "group_status" => "GROUPED_OBJECT",
+        "match_status" => "MISSING_IN_DOCX",
+        "group_key" => "101030400000000::100001::новый взу",
+        "parent_activity_code" => "101030400000000",
+        "object_code" => "100001",
+        "row_number" => 20
+      },
+      confidence: "0.0"
+    )
+
+    AgentAutonomousResolver.new(change_set: @change_set, user: @user).resolve!
+
+    assert_equal "resolved", item.reload.agent_resolution_status
+    assert_equal "confirmed", item.status
+    assert_equal "new_object_parent_code", item.agent_resolution_evidence["resolution_pass"]
+  end
+
+  test "falls back to matching main activity when coded activity is absent" do
+    @version.program_nodes.create!(
+      node_type: "object",
+      code: "03",
+      display_number: "3",
+      name: "Основное мероприятие 03 Строительство объектов водоснабжения",
+      metadata: { "finance_table_index" => 1 }
+    )
+    item = @change_set.change_items.create!(
+      change_type: "new_object",
+      status: "draft",
+      field_name: "object",
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      new_value: "Новый ВЗУ",
+      new_amount_rub: "100000.00",
+      delta_rub: "100000.00",
+      source_reference: {
+        "document_type" => "xlsx_finance",
+        "group_status" => "GROUPED_OBJECT",
+        "match_status" => "MISSING_IN_DOCX",
+        "group_key" => "101030400000000::100001::новый взу",
+        "parent_activity_code" => "101030400000000",
+        "object_code" => "100001",
+        "row_number" => 20
+      },
+      confidence: "0.0"
+    )
+
+    AgentAutonomousResolver.new(change_set: @change_set, user: @user).resolve!
+
+    assert_equal "resolved", item.reload.agent_resolution_status
+    assert_equal "confirmed", item.status
+  end
+
   test "blocks amount updates mapped to non-financial result nodes" do
     result_node = @version.program_nodes.create!(
       node_type: "result",

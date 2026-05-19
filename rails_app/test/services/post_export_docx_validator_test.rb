@@ -151,6 +151,46 @@ class PostExportDocxValidatorTest < ActiveSupport::TestCase
     assert_equal "-17898180.00", error["delta_rub"]
   end
 
+  test "accepts inserted object rows that reparse as activity rows" do
+    object = @version.program_nodes.create!(
+      node_type: "object",
+      parent: @root,
+      source_table_index: 9,
+      source_row_index: 87,
+      display_number: "2.2",
+      name: "Аварийно-восстановительные работы"
+    )
+    object.funding_lines.create!(year: 2026, source_type: "REGIONAL_BUDGET", amount_rub: "95292530.00")
+
+    result = PostExportDocxValidator.new(
+      program_version: @version,
+      generated_docx_attachment: @document.file_attachment,
+      parser_client: FakeParserClient.new(
+        "passport_totals_by_year" => { "2026" => "150000.00", "2027" => "200000.00" },
+        "nodes" => [
+          {
+            "stable_key" => "activity:9:87:2-2",
+            "node_type" => "activity",
+            "source_table_index" => 9,
+            "display_number" => "2.2",
+            "name" => "Аварийно-восстановительные работы"
+          }
+        ],
+        "funding_lines" => [
+          {
+            "node_stable_key" => "activity:9:87:2-2",
+            "year" => 2026,
+            "source_type" => "REGIONAL_BUDGET",
+            "amount_rub" => "95292530.00"
+          }
+        ]
+      ),
+      visual_renderer: FakeVisualRenderer.new("valid")
+    ).validate
+
+    assert_empty result["errors"].select { |item| item["code"] == "object_funding_mismatch" }
+  end
+
   test "checks non numeric summary rows as aggregate funding validation targets" do
     summary = @version.program_nodes.create!(
       node_type: "object",

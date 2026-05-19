@@ -329,7 +329,7 @@ class PostExportDocxValidator
     Array(payload["funding_lines"]).each_with_object(Hash.new(BigDecimal("0"))) do |line, result|
       node = nodes_by_stable_key[line["node_stable_key"]]
       next unless node
-      next unless node["node_type"].to_s.in?(%w[object residual])
+      next unless node["node_type"].to_s.in?(%w[object residual activity])
 
       object_key = object_key_for_payload_node(node)
       next unless object_key
