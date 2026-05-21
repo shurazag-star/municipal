@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
+import unicodedata
 from typing import Any
 
 
@@ -29,8 +30,9 @@ def parse_money_to_rub(value: Any, unit: str = "rub") -> Decimal:
             amount = Decimal("0")
         else:
             text = text.replace("\u00a0", " ").replace("\u202f", " ")
+            text = "".join(char for char in text if unicodedata.category(char) != "Cf")
             text = re.sub(r"(руб\.?|тыс\.?|₽)", "", text, flags=re.IGNORECASE)
-            text = text.replace(" ", "").replace(",", ".")
+            text = re.sub(r"\s+", "", text).replace(",", ".")
             try:
                 amount = Decimal(text)
             except InvalidOperation as exc:
@@ -46,4 +48,3 @@ def parse_money_to_rub(value: Any, unit: str = "rub") -> Decimal:
 
 def rub_to_thousand(amount_rub: Decimal) -> Decimal:
     return quantize_rub(amount_rub / Decimal("1000"))
-

@@ -9,6 +9,10 @@ def test_parses_docx_thousand_rubles_to_rubles_decimal():
     assert parse_money_to_rub("4 853 582,34", unit="thousand_rub") == Decimal("4853582340.00")
 
 
+def test_parses_money_with_hidden_directional_marks():
+    assert parse_money_to_rub("644 395,27\u202c", unit="thousand_rub") == Decimal("644395270.00")
+
+
 def test_converts_rubles_to_thousand_rubles_for_display():
     assert rub_to_thousand(Decimal("90555380.00")) == Decimal("90555.38")
 

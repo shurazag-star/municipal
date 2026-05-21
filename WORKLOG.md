@@ -4721,3 +4721,128 @@
 - Первичный внешний `curl` с локальной машины до public Railway domain словил timeout, но Playwright public healthcheck `/up` после этого вернул `ok`, а production HTTP-smoke внутри web container прошёл успешно.
 - `railway ssh` штатно упирался в host key verification; для проверки использован временный `UserKnownHostsFile=/tmp/municipal_railway_known_hosts`, глобальный `~/.ssh/config` не изменялся.
 - В логах есть не критичные Rails warnings `Scoped order is ignored`; workflow они не ломают, но позже можно почистить места с `find_each`/scoped order.
+
+## 2026-05-19 15:21 MSK — Аудит production-черновика DOCX против исходного DOCX и Excel
+
+### Выполнено
+
+- Из production S3 во временную папку `/tmp/municipal-draft-audit-20260519` выгружены:
+  - исходный DOCX `2593-ПА от 05.11.2025.docx`;
+  - Excel-основание `Отчет об исполнении БР по расходам - 2026-05-08T123954.173.xlsx`;
+  - сформированный черновик `changeset-12-version-2.docx`;
+  - отчет `changeset-12-report.html`.
+- Локально повторно разобраны исходный DOCX, Excel и черновик через parser worker.
+- Сверены итоговые суммы программы, суммы по источникам, структура DOCX, change items и post-export validation.
+- На Railway контейнере выполнен LibreOffice render черновика в PDF; просмотрены образцы страниц, включая страницы с расширенной таблицей мероприятий.
+
+### Изменённые файлы
+
+- `WORKLOG.md`
+
+### Проверки
+
+- Исходный DOCX: `88` узлов, `1015` строк финансирования, `19` таблиц, `3` секции.
+- Черновик DOCX: `125` узлов, `1370` строк финансирования, `19` таблиц, `3` секции.
+- Табличная структура сохранена: количество таблиц и секций не изменилось; строки добавлены в существующие таблицы.
+- Excel содержит `47` object groups и `194` строки.
+- Analysis session: `matched_count=10`, `unmatched_count=37`, режим `xlsx_target`.
+- Change set `#12`: `155` change items, все `155` в статусе `resolved`.
+- Типы изменений: `60 amount_update`, `95 new_object`.
+- Источники изменений: `81 LOCAL_BUDGET`, `70 REGIONAL_BUDGET`, `4 EXTRABUDGETARY`.
+- Новые группы объектов: `37`, ручных вставок `0`.
+- DOCX patch: `applied_count=646`, `inserted_count=37`, `inserted_rows_count=108`, `skipped_count=0`, `text_applied_count=12`, `result_count_applied_count=35`.
+- Итоги Excel против черновика:
+  - 2026: Excel `3021155271.07`, DOCX `3021155270.00`, delta `-1.07`;
+  - 2027: Excel `1926156034.00`, DOCX `1926156030.00`, delta `-4.00`;
+  - 2028: Excel `4347358040.00`, DOCX `4347358040.00`, delta `0.00`.
+- Суммы по источникам:
+  - regional budget за 2026-2028 совпадает с Excel точно;
+  - local budget имеет только округление `-1.07` за 2026 и `-4.00` за 2027;
+  - extrabudgetary в черновике `0`, как в Excel-целевой модели.
+- Post-export validation: `valid`, errors `0`, warnings `0`.
+- External target validation: `valid`.
+- Object funding validation: `772` проверок, errors `0`.
+- Aggregate funding validation: `140` проверок, errors `0`.
+- Visual render: `valid`; дополнительно LibreOffice render черновика дал `80` страниц PDF, образцы страниц визуально читаемы без явных обрывов таблиц.
+
+### Запуски и процессы
+
+- Production-вложения скачивались через Rails runner по SSH в `municipal-web`.
+- Локальный parser worker запускался одноразовыми CLI-командами.
+- Render выполнялся в Railway web container через `soffice` и `pdftoppm`.
+- Долгоживущие локальные серверы/compose-сервисы не запускались.
+
+### Результат
+
+- Черновик `changeset-12-version-2.docx` соответствует Excel как целевой финансовой модели.
+- Структура исходного DOCX сохранена: документ не собран с нуля, а изменен в исходных таблицах.
+- Расхождения с Excel только рублевые округления `1.07` и `4.00`, ниже настроенной tolerance.
+
+### Риски и замечания
+
+- Режим `xlsx_target` означает, что Excel трактуется как полная целевая модель: объекты старого DOCX, отсутствующие в Excel, пересчитываются/обнуляются согласно Excel, а не сохраняются автоматически как было.
+- Excel покрывает `19.23%` baseline objects программы; это ожидаемо для режима полной целевой модели, но бизнесу стоит понимать эту семантику перед нажатием `Сделать актуальной`.
+- Это техническая и финансовая машинная сверка, не юридическая вычитка всех 80 страниц специалистом администрации.
+
+## 2026-05-21 17:46 MSK — Исправление DOCX-разбора hidden Unicode money marks на Railway
+
+### Выполнено
+
+- Проверен production-документ `SourceDocument #52`: `1309-ПА от 10.04.2026 (1).docx` был в статусе `failed`.
+- Найдена фактическая причина ошибки: DOCX-парсер падал на денежной строке `644 395,27\u202c`, где `\u202c` — невидимый Unicode format/control mark.
+- Локально воспроизведено падение на выгруженном с Railway DOCX.
+- В денежном парсере добавлена нормализация Unicode format marks и всех whitespace перед преобразованием в `Decimal`.
+- Добавлен regression-test на сумму с hidden directional mark.
+- Web и worker сервисы Railway задеплоены в production.
+- Production-документ `#52` повторно поставлен в очередь разбора и обработан обновленным Sidekiq worker.
+- Проверен новый контекст агента для рабочего кабинета: DOCX теперь виден как активная загруженная редакция, без ошибки разбора.
+
+### Изменённые файлы
+
+- `parser_worker/municipal_agent/money.py`
+- `parser_worker/tests/test_money_and_sources.py`
+- `WORKLOG.md`
+
+### Проверки
+
+- До исправления: `parse-docx` падал с `ValueError: Cannot parse money value: '644 395,27\\u202c'`.
+- После исправления локальный `parse-docx` на том же production DOCX вернул:
+  - программа: `Развитие инженерной инфраструктуры и энергоэффективности`;
+  - `95` nodes;
+  - `1076` funding lines;
+  - годы паспорта: `2026`, `2027`, `2028`, `2029`, `2030`.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker/tests/test_money_and_sources.py` — `6 passed`.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker/tests/test_docx_parser_fixture.py parser_worker/tests/test_excel_parser_fixture.py parser_worker/tests/test_money_and_sources.py parser_worker/tests/test_universal_budget_sources.py` — `17 passed`.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker` — `58 passed`.
+- `git diff --check` — без ошибок.
+- Railway deploy:
+  - `municipal-web` deployment `4dc6eb57-54f3-40a1-a734-4551a3c70550` — `SUCCESS`;
+  - `municipal-worker` deployment `9587ac32-0995-4391-880c-e33d742824d5` — `SUCCESS`.
+- Railway `/up` через Playwright — `ok`.
+- Production Sidekiq log: `ParseDocumentJob` с аргументом `52` выполнен за `6918.6ms`, статус `done`.
+- Production document state после reparse:
+  - `status: parsed`;
+  - `error: null`;
+  - `nodes: 95`;
+  - `funding_lines: 1076`;
+  - `MunicipalDocumentProfile status: active`, `confidence: 1.0`.
+- Production agent check response:
+  - `1309-ПА от 10.04.2026 (1).docx — текущая DOCX-программа (Активная загруженная редакция)`.
+
+### Запуски и процессы
+
+- Railway CLI/API использовались с секретами из `~/.codex/secrets/railway.env`; значения секретов не выводились.
+- Production Rails runner запускался через SSH в контейнер `municipal-web`.
+- Локальные dev-серверы и compose-сервисы не запускались.
+- В браузере проверен публичный healthcheck `/up`; интерактивный вход в рабочий кабинет не выполнен, потому что пароль production-пользователя не хранится в проекте и не раскрывался.
+
+### Результат
+
+- Причина сообщения агента про ошибку DOCX устранена: документ `1309-ПА от 10.04.2026 (1).docx` разобран в production и виден агенту как активная редакция.
+- Бизнес-логика анализа, Excel-парсер, построение дерева программы и workflow агента не менялись.
+- Исправление локализовано в нормализации денежной строки перед `Decimal`.
+
+### Риски и замечания
+
+- Старые сообщения в чате могут визуально оставаться в истории и показывать прежнюю ошибку, но новое состояние документа уже `parsed`.
+- Исправление закрывает класс проблем с Unicode format marks (`Cf`) в денежных значениях, но не меняет правила распознавания новых нестандартных форматов сумм.
