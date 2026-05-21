@@ -4846,3 +4846,136 @@
 
 - Старые сообщения в чате могут визуально оставаться в истории и показывать прежнюю ошибку, но новое состояние документа уже `parsed`.
 - Исправление закрывает класс проблем с Unicode format marks (`Cf`) в денежных значениях, но не меняет правила распознавания новых нестандартных форматов сумм.
+
+## 2026-05-21 18:32 MSK — Full production recalculation after Excel relative-year parser fix
+
+### Выполнено
+
+- Проверено production-состояние рабочего кабинета после исправления DOCX-разбора:
+  - активный DOCX `SourceDocument #52`: `1309-ПА от 10.04.2026 (1).docx`;
+  - Excel-основание `SourceDocument #51`: `Отчет об исполнении БР по расходам - 2026-05-08T123954.173.xlsx`;
+  - порядок `SourceDocument #45`: `28.10.2025_2489-ПА_Порядок_МП_с_2026.pdf`.
+- Найден дополнительный блокер до пересчета: Excel был в статусе `parsed`, но `program_totals`, `final_totals` и funding по `47` группам были пустыми.
+- Причина: в этом Excel заголовки годовых сумм заданы как `План на 1 год`, `План на 2 год`, `План на 3 год`, без явных `2026/2027/2028`.
+- В Excel-парсер добавлена поддержка относительных годов: базовый год берется из шапки отчета (`с 03.12.2025 по 07.05.2026`), затем колонки мапятся как `2026`, `2027`, `2028`.
+- Добавлен regression-test на такой формат бюджетной росписи.
+- Web и worker Railway задеплоены в production.
+- Production Excel `#51` повторно разобран обновленным worker-ом.
+- От имени рабочего кабинета запущен агентский full workflow: анализ, сопоставление, пересчет, формирование DOCX, post-export проверки.
+- Сформированный DOCX `changeset-14-version-2.docx` скачан из production S3 и независимо разобран локальным parser worker.
+- DOCX дополнительно отрендерен на Railway через LibreOffice в PDF/PNG; выборочно просмотрены страницы `1`, `20`, `60`, `100`, `136`.
+
+### Изменённые файлы
+
+- `parser_worker/municipal_agent/excel_parser.py`
+- `parser_worker/tests/test_excel_parser_fixture.py`
+- `WORKLOG.md`
+
+### Проверки
+
+- До исправления Excel `#51`:
+  - `rows: 194`;
+  - `groups: 47`;
+  - `funded_groups: 0`;
+  - `program_totals: {}`;
+  - `final_totals: {}`.
+- После исправления локально на том же production Excel:
+  - `rows: 194`;
+  - `groups: 47`;
+  - `funded_groups: 47`;
+  - `program_totals/final_totals`:
+    - 2026: `3021155271.07`;
+    - 2027: `1926156034.00`;
+    - 2028: `4347358040.00`.
+- Production reparse Excel `#51`:
+  - `status: parsed`;
+  - `funded_groups: 47`;
+  - `program_totals` заполнены за `2026`, `2027`, `2028`.
+- Активный DOCX `#52` до пересчета:
+  - 2026: `3174823990.00`;
+  - 2027: `2075756870.00`;
+  - 2028: `4365136000.00`;
+  - `95` nodes;
+  - `1076` funding lines.
+- Расчетная разница Excel к активному DOCX:
+  - 2026: `-153668718.93`;
+  - 2027: `-149600836.00`;
+  - 2028: `-17777960.00`.
+- Agent task `#14`:
+  - status: `succeeded`;
+  - duration in worker log: `68113.7ms`;
+  - created `ChangeSet #14`.
+- `ChangeSet #14`:
+  - status: `applied`;
+  - `165` change items;
+  - `70` amount updates;
+  - `95` new object items;
+  - source split: `78 LOCAL_BUDGET`, `83 REGIONAL_BUDGET`, `4 EXTRABUDGETARY`;
+  - amount modes: `97 absolute`, `68 zeroing`;
+  - all `165` resolved;
+  - manual insert required: `0`;
+  - generated DOCX: `changeset-14-version-2.docx`;
+  - post-export validation: `valid`;
+  - agent self-check: `passed`;
+  - independent verifier: `passed`.
+- DOCX patch summary:
+  - `applied_count: 574`;
+  - `inserted_count: 37`;
+  - `inserted_rows_count: 106`;
+  - `skipped_count: 0`;
+  - `text_applied_count: 12`;
+  - `result_count_applied_count: 37`.
+- Сформированный DOCX после локального разбора:
+  - `132` nodes;
+  - `1421` funding lines;
+  - passport totals:
+    - 2026: `3021155270.00`;
+    - 2027: `1926156030.00`;
+    - 2028: `4347358040.00`;
+    - 2029: `0.00`;
+    - 2030: `0.00`.
+- Независимая сверка Excel против generated DOCX:
+  - 2026: delta `-1.07`;
+  - 2027: delta `-4.00`;
+  - 2028: delta `0.00`.
+- Сверка по источникам:
+  - `2026::LOCAL_BUDGET`: delta `-1.07`;
+  - `2027::LOCAL_BUDGET`: delta `-4.00`;
+  - `2028::LOCAL_BUDGET`: delta `0.00`;
+  - `2026/2027/2028::REGIONAL_BUDGET`: delta `0.00`;
+  - федеральный бюджет и внебюджетные средства: `0.00`.
+- Production post-export validation:
+  - `errors: []`;
+  - `warnings: []`;
+  - `object_funding.errors_count: 0`, checked `813`;
+  - `aggregate_funding.errors_count: 0`, checked `140`;
+  - visual render: `valid`, `page_count: 136`.
+- Визуальная выборочная проверка страниц `1`, `20`, `60`, `100`, `136`: документ открывается, страницы рендерятся, явных обрывов таблиц или пустого документа не найдено.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker/tests/test_excel_parser_fixture.py` — `3 passed`.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker` — `59 passed`.
+- `git diff --check` — без ошибок.
+- Railway `/up` через Playwright — `ok`.
+
+### Запуски и процессы
+
+- Railway deploy:
+  - `municipal-web` deployment `06d83d59-280e-48b6-b085-b53a0362c9e4` — `SUCCESS`;
+  - `municipal-worker` deployment `a89ec1c1-1af2-4cc6-8cae-ff1cbb4c57bc` — `SUCCESS`.
+- Production `ParseDocumentJob` для Excel `#51` выполнен Sidekiq worker-ом за `2445.14ms`.
+- Production `AgentTaskJob` для task `#14` выполнен Sidekiq worker-ом за `68113.7ms`.
+- Файлы выгружались во временную папку `/tmp/municipal-recalc-20260521`.
+- Локальные dev-серверы не запускались.
+- Был запущен и остановлен только один локальный SSH-polling процесс, созданный в рамках этой проверки.
+
+### Результат
+
+- Парсер Excel теперь корректно понимает этот формат бюджетной росписи с относительными годами.
+- Агент на Railway сформировал новую редакцию `changeset-14-version-2.docx`.
+- Сформированный DOCX соответствует Excel как целевой финансовой модели; остаточные расхождения `1.07` и `4.00` руб. объясняются округлением DOCX до целых рублей и находятся в допустимой проверкой зоне.
+- Новая редакция сформирована как проверенный черновик; она не утверждалась как актуальная редакция программы.
+
+### Риски и замечания
+
+- Excel покрывает `18.18%` объектов активной DOCX-программы. В режиме `xlsx_target` отсутствующие в Excel объекты DOCX обнуляются как часть целевой модели; это ожидаемое поведение, но его нужно понимать перед нажатием `Сделать актуальной`.
+- В worker logs остаются не критичные Rails warnings `Scoped order is ignored`; на текущий workflow они не повлияли.
+- Это машинная финансовая и структурная сверка, не юридическая ручная вычитка всех `136` страниц.

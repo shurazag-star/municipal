@@ -91,7 +91,7 @@ def parse_xlsx_finance_report(path: str | Path) -> ParsedExcelReport:
     worksheet = workbook[sheet_name]
 
     data_start_row, headers = _detect_header(worksheet)
-    amount_columns = _detect_amount_columns(headers)
+    amount_columns = _detect_amount_columns(headers, base_year=_infer_relative_plan_base_year(worksheet))
     rows: List[ExcelFinanceRow] = []
     program_totals: Dict[int, Decimal] = {}
     final_totals: Dict[int, Decimal] = {}
@@ -243,7 +243,7 @@ def _row_budget_source(values: Mapping[str, object]) -> BudgetSource:
     return source
 
 
-def _detect_amount_columns(headers: Mapping[int, str]) -> Dict[int, AmountColumn]:
+def _detect_amount_columns(headers: Mapping[int, str], base_year: Optional[int] = None) -> Dict[int, AmountColumn]:
     columns: Dict[int, AmountColumn] = {}
     current_year: Optional[int] = None
     in_plan_columns = True
@@ -256,14 +256,27 @@ def _detect_amount_columns(headers: Mapping[int, str]) -> Dict[int, AmountColumn
         match = re.search(r"(20\d{2})", text)
         if match:
             current_year = int(match.group(1))
+        relative_match = re.search(r"план\s+на\s+([123])\s*год", text)
+        if not match and relative_match and base_year is not None:
+            current_year = base_year + int(relative_match.group(1)) - 1
         source = normalize_budget_source(text)
         if match and "всего" in text:
             columns[idx] = (current_year, None, False)
-        elif match and _looks_like_plan_total_header(text):
+        elif (match or relative_match) and _looks_like_plan_total_header(text):
             columns[idx] = (current_year, None, True)
         elif current_year is not None and source is not BudgetSource.UNKNOWN:
             columns[idx] = (current_year, source, False)
     return columns
+
+
+def _infer_relative_plan_base_year(worksheet) -> Optional[int]:
+    years: List[int] = []
+    max_row = min(worksheet.max_row, 10)
+    max_col = min(worksheet.max_column, 10)
+    for row_cells in worksheet.iter_rows(min_row=1, max_row=max_row, max_col=max_col, values_only=True):
+        for value in row_cells:
+            years.extend(int(match) for match in re.findall(r"20\d{2}", "" if value is None else str(value)))
+    return max(years) if years else None
 
 
 def _looks_like_plan_total_header(text: str) -> bool:
