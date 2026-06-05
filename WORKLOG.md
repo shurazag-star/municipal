@@ -5644,9 +5644,11 @@
 ### Запуски и процессы
 
 - Для локальных тестов использовались Docker Compose services `postgres`, `redis`, `parser_worker` и временные `web-run` контейнеры.
+- После завершения проверки `docker-compose stop sidekiq parser_worker postgres redis` выполнен успешно; `docker-compose ps` пустой.
 - Railway CLI `up` для web/worker после upload завершался с network timeout, но deployment ids были созданы и подтверждены через Railway API как `SUCCESS`.
 - Один ошибочный polling shell с неправильным inline Python был дождался завершения и не оставлен активным.
 - Production runner запускался через `railway ssh` в `municipal-web`.
+- Старые Railway CLI helper-процессы в состоянии `UE` (`railway status`, `railway --help`, `railway connect --help`) не завершились после обычного `kill`; отдельные `railway ssh` процессы относятся к другому проекту и не трогались.
 
 ### Результат
 
