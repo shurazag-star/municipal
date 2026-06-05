@@ -17,7 +17,7 @@ def test_format_money_for_docx_preserves_precision_and_grouping():
     assert formatted == "29 163,16"
 
 
-def test_format_money_for_docx_keeps_ungrouped_source_style():
+def test_format_money_for_docx_keeps_large_ungrouped_source_style_by_default():
     formatted = format_money_for_docx(
         Decimal("29163160.00"),
         source_cell_raw_value="1000,00",
@@ -25,6 +25,16 @@ def test_format_money_for_docx_keeps_ungrouped_source_style():
     )
 
     assert formatted == "29163,16"
+
+
+def test_format_money_for_docx_keeps_small_ungrouped_source_style():
+    formatted = format_money_for_docx(
+        Decimal("963900.00"),
+        source_cell_raw_value="1000,00",
+        unit="thousand_rub",
+    )
+
+    assert formatted == "963,90"
 
 
 def test_patch_docx_replaces_old_approval_date_with_placeholders(tmp_path):
@@ -197,6 +207,13 @@ def test_patch_docx_inserts_new_object_rows_from_template(tmp_path):
     assert table.cell(3, 5).text == "100,00"
     assert table.cell(3, 6).text == "200,00"
     assert table.cell(4, 3).text == "Местный бюджет"
+
+
+def test_format_money_groups_inserted_values_without_template_grouping():
+    assert (
+        format_money_for_docx("11245920.00", source_cell_raw_value="0,00", unit="thousand_rub", default_grouping=True)
+        == "11 245,92"
+    )
 
 
 def test_patch_docx_infers_inserted_row_responsible_from_next_row(tmp_path):

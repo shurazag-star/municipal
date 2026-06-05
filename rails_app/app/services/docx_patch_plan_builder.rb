@@ -372,6 +372,7 @@ class DocxPatchPlanBuilder
     return unless node.metadata&.dig("source").to_s.start_with?("finance")
     return unless finance_display_number?(node.display_number)
     return if [node.source_table_index, node.source_row_index].any?(&:blank?)
+    return unless recalculable_execution_period?(node.execution_period)
 
     period = execution_period_from_lines(node.funding_lines)
     return if period.blank?
@@ -553,6 +554,19 @@ class DocxPatchPlanBuilder
     return years.first.to_s if years.one?
 
     "#{years.first}-#{years.last}"
+  end
+
+  def recalculable_execution_period?(value)
+    match = value.to_s.match(/\A\s*(20\d{2})\s*[-–—]\s*(20\d{2})\s*\z/)
+    return false unless match
+
+    start_year = @target_program_version.municipal_program.period_start_year.to_i
+    end_year = @target_program_version.municipal_program.period_end_year.to_i
+    return true if start_year.zero? || end_year.zero?
+
+    first = match[1].to_i
+    last = match[2].to_i
+    first >= start_year && last <= end_year
   end
 
   def finance_display_number?(value)

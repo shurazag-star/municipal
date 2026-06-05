@@ -210,6 +210,15 @@ class ExternalSourceMatcher
   end
 
   def find_program_node(group)
+    if visible_residual_group?(group)
+      return uncertain_match(
+        nil,
+        "UNASSIGNED_RESIDUAL",
+        "Видимая остаточная строка Excel должна быть вставлена отдельной строкой программы",
+        "0.0"
+      )
+    end
+
     existing_parent_total = find_existing_parent_total_match(group)
     if existing_parent_total
       return exact_match(
@@ -279,6 +288,7 @@ class ExternalSourceMatcher
 
   def find_existing_parent_total_match(group)
     return nil unless group["status"] == "UNASSIGNED_RESIDUAL"
+    return nil if visible_residual_group?(group)
     return nil if group["parent_activity_code"].blank?
 
     parsed = parse_external_parent_code(group["parent_activity_code"])
@@ -488,6 +498,7 @@ class ExternalSourceMatcher
 
   def find_residual_program_node(group)
     return nil unless group["status"] == "UNASSIGNED_RESIDUAL"
+    return nil if visible_residual_group?(group)
 
     names = [
       group["residual_parent_name"],
@@ -579,6 +590,18 @@ class ExternalSourceMatcher
   def residual_placeholder_name?(name)
     normalized = normalize_name(name)
     normalized.blank? || normalized == "неуказанное направление"
+  end
+
+  def visible_residual_group?(group)
+    return false unless group["status"].to_s == "UNASSIGNED_RESIDUAL"
+
+    normalized = normalize_name(group["object_name"].presence || group["residual_parent_name"].presence)
+    return false if normalized.blank?
+    return false if normalized.include?("сверх объемов")
+
+    normalized == normalize_name("Строительство и реконструкция объектов водоснабжения") ||
+      normalized == normalize_name("Строительство (реконструкция) канализационных коллекторов, канализационных насосных станций") ||
+      normalized.start_with?(normalize_name("Строительство и реконструкция (модернизация, техническое перевооружение) объектов теплоснабжения муниципальной собственности"))
   end
 
   def parse_external_parent_code(raw_code)

@@ -889,6 +889,119 @@ class ChangeSetApplicationServiceTest < ActiveSupport::TestCase
     assert_equal 1, @change_set.reload.export_summary.dig("docx_patch", "inserted_count")
   end
 
+  test "inserts visible residual under structural activity instead of finance mirror row" do
+    mirror = @version.program_nodes.create!(
+      parent: @subprogram,
+      node_type: "object",
+      name: "Мероприятие 03.01 ‒ Строительство и реконструкция объектов водоснабжения муниципальной собственности",
+      normalized_name: "мероприятие 03 01 строительство и реконструкция объектов водоснабжения муниципальной собственности",
+      display_number: "3.1",
+      code: "03.01",
+      source_table_index: 0,
+      source_row_index: 3
+    )
+    mirror.funding_lines.create!(
+      year: 2027,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "100000.00",
+      source_document: @source_document,
+      raw_source_name: "LOCAL_BUDGET",
+      metadata: {
+        "source_table_index" => 0,
+        "source_row_index" => 3,
+        "source_cell_index" => 5,
+        "raw_value" => "100,00",
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    structural = @version.program_nodes.create!(
+      parent: @subprogram,
+      node_type: "activity",
+      name: mirror.name,
+      normalized_name: mirror.normalized_name,
+      display_number: "3.1",
+      code: "03.01",
+      source_table_index: 0,
+      source_row_index: 3
+    )
+    @version.program_nodes.create!(
+      parent: structural,
+      node_type: "object",
+      name: "Существующий дочерний объект",
+      normalized_name: "существующий дочерний объект",
+      display_number: "3.1.7",
+      source_table_index: 0,
+      source_row_index: 3
+    )
+    @change_set.change_items.create!(
+      change_type: "new_object",
+      status: "confirmed",
+      field_name: "object",
+      year: 2027,
+      source_type: "LOCAL_BUDGET",
+      new_value: "Строительство и реконструкция объектов водоснабжения",
+      new_amount_rub: "34386810.00",
+      delta_rub: "34386810.00",
+      source_reference: {
+        "group_key" => "UNASSIGNED_RESIDUAL::101030100000000::20",
+        "group_status" => "UNASSIGNED_RESIDUAL",
+        "parent_activity_code" => "101030100000000",
+        "object_code" => "0000000000.0000000000",
+        "object_name" => "Строительство и реконструкция объектов водоснабжения",
+        "row_number" => 20
+      },
+      confidence: "0.50",
+      requires_user_confirmation: false,
+      user_confirmed: true
+    )
+
+    result = ChangeSetApplicationService.new(change_set: @change_set, user: @user).apply!
+
+    target_node = result.target_program_version.program_nodes.find_by!(
+      name: "Строительство и реконструкция объектов водоснабжения муниципальной собственности"
+    )
+    assert_equal structural.name, target_node.parent.name
+    assert_equal "3.1.8", target_node.display_number
+  end
+
+  test "prefers exact subprogram parent before shifted finance table fallback" do
+    water = @version.program_nodes.create!(
+      parent: @subprogram,
+      node_type: "activity",
+      name: "Водоснабжение 02.01",
+      display_number: "2.1",
+      code: "02.01",
+      source_table_index: 4,
+      source_row_index: 8,
+      metadata: { "finance_table_index" => 1 }
+    )
+    sewer_subprogram = @version.program_nodes.create!(
+      node_type: "subprogram",
+      name: "Подпрограмма 2",
+      display_number: "2"
+    )
+    sewer = @version.program_nodes.create!(
+      parent: sewer_subprogram,
+      node_type: "activity",
+      name: "Водоотведение 02.01",
+      display_number: "2.1",
+      code: "02.01",
+      source_table_index: 5,
+      source_row_index: 8
+    )
+    item = ChangeItem.new(
+      source_reference: {
+        "parent_activity_code" => "102020100000000",
+        "group_status" => "UNASSIGNED_RESIDUAL"
+      }
+    )
+
+    parent = ChangeSetApplicationService.new(change_set: @change_set, user: @user).send(:resolve_parent_node, @version, item)
+
+    assert_equal sewer, parent
+    assert_not_equal water, parent
+  end
+
   test "inserts new object when a funding source has no amount in one of the object years" do
     @object.funding_lines.create!(
       year: 2027,

@@ -1449,6 +1449,8 @@ class ChangeSetApplicationService
 
     activity_candidates = scoped_parent_candidates(scope, parsed[:activity_code])
     activity_matches = activity_candidates.select { |node| parent_activity_matches?(node, parsed) }
+    exact_activity_matches = activity_matches.select { |node| node_subprogram_exact_match?(node, parsed) }
+    return exact_activity_matches if exact_activity_matches.any?
     return activity_matches if activity_matches.any?
     return activity_candidates if parsed[:activity_code].present? && activity_candidates.one?
 
@@ -1458,6 +1460,8 @@ class ChangeSetApplicationService
   def main_activity_parent_candidates(scope, parsed)
     main_candidates = scoped_parent_candidates(scope, parsed[:main_activity_code])
     main_matches = main_candidates.select { |node| parent_main_activity_matches?(node, parsed) }
+    exact_main_matches = main_matches.select { |node| node_subprogram_exact_match?(node, parsed) }
+    return exact_main_matches if exact_main_matches.any?
     return main_matches if main_matches.any?
     return main_candidates if parsed[:main_activity_code].present? && main_candidates.one?
 
@@ -1467,7 +1471,18 @@ class ChangeSetApplicationService
   def scoped_parent_candidates(scope, code)
     candidates = scope.where(node_type: %w[activity object])
     candidates = candidates.where(code: code) if code.present?
-    candidates.to_a.select { |node| activity_parent_candidate?(node) }
+    candidates.to_a
+      .select { |node| activity_parent_candidate?(node) }
+      .sort_by { |node| parent_candidate_sort_key(node) }
+  end
+
+  def parent_candidate_sort_key(node)
+    [
+      node.node_type == "activity" ? 0 : 1,
+      node.source_table_index || 1_000_000,
+      node.source_row_index || 1_000_000,
+      node.id
+    ]
   end
 
   def parent_activity_matches?(node, parsed)
@@ -1488,10 +1503,15 @@ class ChangeSetApplicationService
     expected = parsed[:subprogram_display].to_s
     return true if expected.blank?
 
-    return true if node_subprogram_display(node).to_s == expected
+    return true if node_subprogram_exact_match?(node, parsed)
 
     shifted_expected = expected.to_i - 1 if expected.match?(/\A\d+\z/) && expected.to_i > 1
     shifted_expected.present? && node_finance_table_index(node).to_s == shifted_expected.to_s
+  end
+
+  def node_subprogram_exact_match?(node, parsed)
+    expected = parsed[:subprogram_display].to_s
+    expected.blank? || node_subprogram_display(node).to_s == expected
   end
 
   def activity_parent_candidate?(node)

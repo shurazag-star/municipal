@@ -301,7 +301,7 @@ class DocxPatchPlanBuilderTest < ActiveSupport::TestCase
     assert_equal BigDecimal("300000.00"), BigDecimal(inferred.fetch("amount_rub"))
   end
 
-  test "plans execution period text update from nonzero funding years" do
+  test "plans execution period text update from nonzero funding years for program-period ranges" do
     node = @version.program_nodes.create!(
       node_type: "object",
       name: "Объект",
@@ -330,5 +330,32 @@ class DocxPatchPlanBuilderTest < ActiveSupport::TestCase
     assert_equal 10, update["row_index"]
     assert_equal 2, update["cell_index"]
     assert_equal "2027", update["text"]
+  end
+
+  test "does not rewrite historical single-year execution period from funding years" do
+    node = @version.program_nodes.create!(
+      node_type: "object",
+      name: "Исторический объект",
+      display_number: "2.1.2",
+      source_table_index: 3,
+      source_row_index: 11,
+      execution_period: "2023",
+      metadata: { "source" => "finance_table" }
+    )
+    line = node.funding_lines.create!(year: 2026, source_type: "LOCAL_BUDGET", amount_rub: "0.00")
+    node.funding_lines.create!(year: 2027, source_type: "LOCAL_BUDGET", amount_rub: "100000.00")
+    item = ChangeItem.new(
+      program_node_id: line.program_node_id,
+      source_reference: { "amount_mode" => "zeroing", "target_model_absent_in_excel" => true }
+    )
+
+    updates = DocxPatchPlanBuilder.new(
+      target_program_version: @version,
+      amount_items: [item],
+      new_object_result: {},
+      node_map: { node.id => node }
+    ).text_updates
+
+    assert_nil updates.detect { |payload| payload["reason"] == "execution_period" }
   end
 end

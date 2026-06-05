@@ -99,6 +99,92 @@ class ExternalSourceMatcherTest < ActiveSupport::TestCase
     assert_equal "101020100000000", results.first.source_reference["parent_activity_code"]
   end
 
+  test "keeps visible water residual as a new object instead of matching parent activity" do
+    subprogram = @version.program_nodes.create!(
+      node_type: "subprogram",
+      name: "Подпрограмма 1",
+      display_number: "1"
+    )
+    parent_activity = @version.program_nodes.create!(
+      parent: subprogram,
+      node_type: "activity",
+      name: "Основное мероприятие 02",
+      display_number: "2",
+      code: "02"
+    )
+    @version.program_nodes.create!(
+      parent: parent_activity,
+      node_type: "object",
+      name: "Мероприятие 02.01 ‒ Строительство и реконструкция объектов водоснабжения муниципальной собственности",
+      normalized_name: "мероприятие 02 01 строительство и реконструкция объектов водоснабжения муниципальной собственности",
+      display_number: "2.1",
+      code: "02.01"
+    ).funding_lines.create!(year: 2027, source_type: "LOCAL_BUDGET", amount_rub: "11245500.00")
+    residual_name = "Строительство и реконструкция объектов водоснабжения"
+    document = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "sheet_name" => "Результат",
+        "rows" => [
+          {
+            "row_number" => 19,
+            "row_type" => "UNKNOWN_ROW",
+            "raw_values" => {
+              "Классификация Код цел. программы.  Код мероприятия" => "10102S4090",
+              "Наименование Наименование Наименование" => residual_name
+            }
+          },
+          {
+            "row_number" => 20,
+            "row_type" => "UNASSIGNED_RESIDUAL",
+            "parent_activity_code" => "101020100000000",
+            "object_code" => "0000000000.0000000000",
+            "object_name" => "Неуказанное направление",
+            "funding" => { "2027::LOCAL_BUDGET" => "34386810.00" },
+            "raw_values" => {
+              "Классификация Код цел. программы.  Код мероприятия" => "10102S4090",
+              "Наименование Наименование Наименование" => "Неуказанное направление"
+            }
+          }
+        ],
+        "object_groups" => [
+          {
+            "group_key" => "UNASSIGNED_RESIDUAL::101020100000000::20",
+            "status" => "UNASSIGNED_RESIDUAL",
+            "object_code" => "0000000000.0000000000",
+            "object_name" => "Неуказанное направление",
+            "funding" => { "2027::LOCAL_BUDGET" => "34386810.00" },
+            "rows" => [
+              {
+                "row_number" => 20,
+                "row_type" => "UNASSIGNED_RESIDUAL",
+                "parent_activity_code" => "101020100000000",
+                "object_code" => "0000000000.0000000000",
+                "object_name" => "Неуказанное направление",
+                "funding" => { "2027::LOCAL_BUDGET" => "34386810.00" },
+                "raw_values" => {
+                  "Классификация Код цел. программы.  Код мероприятия" => "10102S4090",
+                  "Наименование Наименование Наименование" => "Неуказанное направление"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    )
+    session = analysis_session!(document)
+
+    result = ExternalSourceMatcher.new(analysis_session: session, source_document: document, semantic_agent: RaisingSemanticAgent.new).match!.first
+
+    assert_nil result.program_node
+    assert_equal "UNASSIGNED_RESIDUAL", result.match_status
+    assert_equal residual_name, result.external_group["object_name"]
+  end
+
   test "keeps unassigned residual inside its parent activity context" do
     subprogram = @version.program_nodes.create!(
       node_type: "subprogram",

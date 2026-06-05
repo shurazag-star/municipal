@@ -17,6 +17,7 @@ def format_money_for_docx(
     amount_rub: Decimal | str | int | float,
     source_cell_raw_value: str,
     unit: str = "thousand_rub",
+    default_grouping: bool = False,
 ) -> str:
     amount = Decimal(str(amount_rub))
     if unit == "thousand_rub":
@@ -28,6 +29,8 @@ def format_money_for_docx(
     quant = Decimal("1") if decimal_places == 0 else Decimal("1").scaleb(-decimal_places)
     amount = amount.quantize(quant, rounding=ROUND_HALF_UP)
     grouping_separator = _grouping_separator(source_cell_raw_value)
+    if grouping_separator is None and default_grouping and abs(amount) >= Decimal("1000"):
+        grouping_separator = " "
     if grouping_separator:
         formatted = f"{amount:,.{decimal_places}f}"
         return formatted.replace(",", grouping_separator).replace(".", ",")
@@ -554,7 +557,7 @@ def _set_cell_if_present(cells, index: int, value: str) -> None:
 
 def _set_money_cell(cells, index: int, amount: Decimal | str | int | float, unit: str, raw_value: str) -> None:
     if 0 <= index < len(cells):
-        formatted = format_money_for_docx(amount, source_cell_raw_value=raw_value, unit=unit)
+        formatted = format_money_for_docx(amount, source_cell_raw_value=raw_value, unit=unit, default_grouping=True)
         _set_cell_text_preserving_first_run(cells[index], formatted)
 
 
