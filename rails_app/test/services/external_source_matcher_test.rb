@@ -99,6 +99,114 @@ class ExternalSourceMatcherTest < ActiveSupport::TestCase
     assert_equal "101020100000000", results.first.source_reference["parent_activity_code"]
   end
 
+  test "keeps unassigned residual inside its parent activity context" do
+    subprogram = @version.program_nodes.create!(
+      node_type: "subprogram",
+      name: "Подпрограмма 3",
+      display_number: "3"
+    )
+    old_activity = @version.program_nodes.create!(
+      parent: subprogram,
+      node_type: "activity",
+      name: "Мероприятие 01.07. Реализация мероприятий по строительству и реконструкции объектов теплоснабжения муниципальной собственности",
+      display_number: "1.7",
+      code: "01.07"
+    )
+    @version.program_nodes.create!(
+      parent: old_activity,
+      node_type: "object",
+      name: "Строительство БМК мощностью 10 МВт по адресу: Московская область, г.о. Шатура, поселок Туголесский бор (в т.ч. ПИР)",
+      normalized_name: "строительство бмк мощностью 10 мвт по адресу московская область г о шатура поселок туголесский бор в т ч пир",
+      display_number: "1.3.2"
+    )
+    @version.program_nodes.create!(
+      parent: subprogram,
+      node_type: "activity",
+      name: "Мероприятие 01.31 Строительство и реконструкция объектов теплоснабжения муниципальной собственности",
+      display_number: "1.31",
+      code: "01.31"
+    )
+    residual_name = "Строительство и реконструкция (модернизация, техническое перевооружение) объектов теплоснабжения муниципальной собственности за счет средств местного бюджета"
+    document = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "sheet_name" => "Результат",
+        "rows" => [
+          {
+            "row_number" => 59,
+            "row_type" => "OBJECT_LEAF_ROW",
+            "parent_activity_code" => "103012900000000",
+            "object_code" => "1000004047.1000004922",
+            "object_name" => "Строительство БМК мощностью 10 МВт по адресу: Московская область, г.о. Шатура, поселок Туголесский бор (в т.ч. ПИР)",
+            "raw_values" => {
+              "Классификация Код цел. программы.  Код мероприятия" => "103019Т020",
+              "Наименование Наименование Наименование" => "Неуказанное направление"
+            }
+          },
+          {
+            "row_number" => 60,
+            "row_type" => "UNKNOWN_ROW",
+            "parent_activity_code" => "",
+            "object_code" => "",
+            "object_name" => "",
+            "raw_values" => {
+              "Классификация Код цел. программы.  Код мероприятия" => "103019Т030",
+              "Наименование Наименование Наименование" => residual_name
+            }
+          },
+          {
+            "row_number" => 61,
+            "row_type" => "UNASSIGNED_RESIDUAL_ROW",
+            "parent_activity_code" => "103013100000000",
+            "object_code" => "0000000000.0000000000",
+            "object_name" => "Неуказанное направление",
+            "funding" => { "2027::LOCAL_BUDGET" => "1106000.00" },
+            "raw_values" => {
+              "Классификация Код цел. программы.  Код мероприятия" => "103019Т030",
+              "Наименование Наименование Наименование" => "Неуказанное направление"
+            }
+          }
+        ],
+        "object_groups" => [
+          {
+            "group_key" => "UNASSIGNED_RESIDUAL::103013100000000::61",
+            "status" => "UNASSIGNED_RESIDUAL",
+            "object_code" => "0000000000.0000000000",
+            "object_name" => "Неуказанное направление",
+            "funding" => { "2027::LOCAL_BUDGET" => "1106000.00" },
+            "rows" => [
+              {
+                "row_number" => 61,
+                "row_type" => "UNASSIGNED_RESIDUAL_ROW",
+                "parent_activity_code" => "103013100000000",
+                "object_code" => "0000000000.0000000000",
+                "object_name" => "Неуказанное направление",
+                "funding" => { "2027::LOCAL_BUDGET" => "1106000.00" },
+                "raw_values" => {
+                  "Классификация Код цел. программы.  Код мероприятия" => "103019Т030",
+                  "Наименование Наименование Наименование" => "Неуказанное направление"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    )
+    session = analysis_session!(document)
+
+    result = ExternalSourceMatcher.new(analysis_session: session, source_document: document).match!.first
+
+    assert_nil result.program_node
+    assert_equal "UNASSIGNED_RESIDUAL", result.match_status
+    assert_equal residual_name, result.external_group["object_name"]
+    assert_equal residual_name, result.source_reference["residual_parent_name"]
+    assert_equal 60, result.source_reference["residual_parent_row_number"]
+  end
+
   test "matches activity aggregate row with municipal program prefix code" do
     subprogram = @version.program_nodes.create!(
       node_type: "subprogram",

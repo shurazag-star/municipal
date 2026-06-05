@@ -86,7 +86,7 @@ class ExternalSourceMatcher
       raw_values = first_row["raw_values"].presence || {}
       residual_context = residual_parent_context(first_row, group)
       object_name = group["object_name"].presence || first_row["object_name"].presence
-      if object_name.blank? && group["status"] == "UNASSIGNED_RESIDUAL"
+      if group["status"] == "UNASSIGNED_RESIDUAL" && (object_name.blank? || residual_placeholder_name?(object_name))
         object_name = residual_context["name"].presence ||
           raw_values["Наименование"].presence ||
           raw_values["Наименование объекта"].presence ||
@@ -495,7 +495,9 @@ class ExternalSourceMatcher
     ].compact.map(&:to_s).reject { |name| residual_placeholder_name?(name) }
     return nil if names.empty?
 
-    match = names.filter_map { |name| best_structural_match(normalize_name(name)) }.max_by { |candidate| candidate[:confidence] }
+    parsed = parse_external_parent_code(group["parent_activity_code"])
+    candidates = residual_structural_candidates(parsed)
+    match = names.filter_map { |name| best_structural_match(normalize_name(name), candidates: candidates) }.max_by { |candidate| candidate[:confidence] }
     return nil unless match && match[:confidence] >= BigDecimal("0.45")
 
     leaf = application_leaf_for(match[:node])
@@ -504,12 +506,18 @@ class ExternalSourceMatcher
     { node: leaf, confidence: match[:confidence] }
   end
 
-  def best_structural_match(normalized_name)
+  def best_structural_match(normalized_name, candidates: structural_nodes)
     return nil if normalized_name.blank?
 
-    structural_nodes.map do |node|
+    candidates.map do |node|
       { node: node, confidence: name_similarity(normalized_name, normalized_node_name(node)) }
     end.max_by { |candidate| candidate[:confidence] }
+  end
+
+  def residual_structural_candidates(parsed)
+    return structural_nodes unless parsed
+
+    structural_nodes.select { |node| node_matches_parent_activity?(node, parsed) }
   end
 
   def application_leaf_for(node)
@@ -547,12 +555,25 @@ class ExternalSourceMatcher
   end
 
   def residual_context_name(row)
-    name = row.dig("raw_values", "Наименование").presence ||
-      row.dig("raw_values", "Наименование объекта").presence ||
+    name = raw_value_by_header(row, "Наименование").presence ||
+      raw_value_by_header(row, "Наименование объекта").presence ||
       row["object_name"].presence
     return nil if residual_placeholder_name?(name)
 
     name.to_s.squish.presence
+  end
+
+  def raw_value_by_header(row, expected_header)
+    raw_values = row.fetch("raw_values", {}) || {}
+    expected = compact_header_key(expected_header)
+    pair = raw_values.detect do |header, value|
+      value.present? && compact_header_key(header) == expected
+    end
+    pair&.last
+  end
+
+  def compact_header_key(value)
+    normalize_name(value).split.uniq.join(" ")
   end
 
   def residual_placeholder_name?(name)
