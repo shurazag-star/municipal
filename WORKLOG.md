@@ -5499,3 +5499,69 @@
 
 - Рабочее дерево содержит большой накопленный diff предыдущих расчетных/parser задач. Он проверен полной Rails suite и parser suite, но staging перед commit требует финального просмотра `git diff --stat` и отсутствия секретов.
 - Production provisioning Шатуры и проверка изоляции с Люберцами еще не выполнялись в этой записи; они будут зафиксированы отдельной записью после деплоя.
+
+## 2026-06-05 20:10:03 MSK — Production deploy и provisioning Шатуры
+
+### Выполнено
+
+- Закоммичен и запушен релиз `32e77b7 Prepare Shatura tenant rollout` в `origin/main`.
+- Выполнен ручной Railway deploy, потому что GitHub auto-deploy после push не стартовал автоматически.
+- Production web и worker обновлены:
+  - web deployment `b4c39424-8b5e-4417-9b9a-d913c9df22f4` -> `SUCCESS`;
+  - worker deployment `4ca30587-667c-4786-85ba-e5afc06881bb` -> `SUCCESS`.
+- Production `/up` вернул `ok`.
+- Existing production tenant `Organization #1` помечен как Люберцы:
+  - `tenant_key=lyubertsy`;
+  - `default_source_mode=auto`;
+  - имя: `Городской округ Люберцы`;
+  - документы/программы/пользователи сохранены: `documents=3`, `programs=1`, `users=2`.
+- Создан отдельный production tenant Шатуры:
+  - `Organization #2`;
+  - `tenant_key=shatura`;
+  - `default_source_mode=auto`;
+  - users: `admin-shatura@municipal.local` (`admin`), `worker-shatura@municipal.local` (`user`);
+  - `documents=0`, `programs=0`.
+- Пароли Шатуры сгенерированы и сохранены вне репозитория: `/Users/aleksandrzagrekov/.codex/secrets/municipal-shatura.env` (`0600`).
+
+### Проверки
+
+- Railway status:
+  - `municipal-web` -> online;
+  - `municipal-worker` -> online;
+  - Postgres/Redis/bucket -> online.
+- Production health:
+  - `curl -fsS https://municipal-web-production.up.railway.app/up` -> `ok`.
+- Shatura worker smoke:
+  - login `worker-shatura@municipal.local` -> `302 /employee`;
+  - GET `/employee` -> `200`;
+  - UI marker `Документ-основание` найден;
+  - document marker count в кабинете -> `0`.
+- Shatura admin smoke:
+  - login `admin-shatura@municipal.local` -> `302 /`;
+  - GET `/` -> `200`;
+  - agent workspace marker найден.
+- Lyubertsy worker smoke:
+  - login по актуальному production secret -> `302 /employee`;
+  - GET `/employee` -> `200`;
+  - UI marker `Документ-основание` найден.
+- DB isolation audit:
+  - `Organization #1` Люберцы: users `[admin@example.com, 11@11]`, `documents=3`, `programs=1`, `conversations=2`;
+  - `Organization #2` Шатура: users `[admin-shatura@municipal.local, worker-shatura@municipal.local]`, `documents=0`, `programs=0`, `conversations=2`;
+  - Shatura users привязаны к `organization_id=2`.
+
+### Запуски и процессы
+
+- Production commands выполнялись через Railway CLI/SSH внутри `municipal-web`, без вывода секретов.
+- Для локальных Rails checks и production runner fallback использовались Docker Compose контейнеры `postgres`, `redis`, `parser_worker`; они будут остановлены после финальной проверки состояния.
+
+### Результат
+
+- Люберцы продолжают работать на существующих данных и пользователях.
+- Шатура создана как отдельный рабочий кабинет с отдельными admin/worker пользователями и пустым набором документов.
+- Загруженные в Шатуру документы не попадут в Люберцы, потому что пользователи и документы находятся в разных `Organization`.
+
+### Риски и замечания
+
+- Тестовая загрузка реальных документов Шатуры пока не выполнялась: пользователь отдельно передаст документы для теста.
+- `/admin` сейчас возвращает `204`, потому что в проекте нет view для `admin/dashboard#index`; рабочий admin root `/` открывается и это не блокирует кабинет агента.
+- Пароли не записывались в репозиторий и не выводились в чат/WORKLOG.
