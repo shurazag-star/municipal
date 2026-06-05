@@ -158,18 +158,11 @@ class ExternalFinancialTargetValidator
   end
 
   def expected_source_year_totals
-    direct = @external_target_payload["source_totals"]
-    return normalized_source_money_hash(direct) if direct.present?
-
-    Array(@external_target_payload["object_groups"]).each_with_object({}) do |group, totals|
-      (group["funding"] || {}).each do |raw_key, raw_amount|
-        year, source_type = parse_funding_key(raw_key)
-        next if year.blank? || source_type.blank?
-
-        key = [year, source_type]
-        totals[key] = (totals[key] || BigDecimal("0")) + BigDecimal(raw_amount.to_s)
-      end
-    end
+    ExternalTargetSourceTotalResolver.new(
+      payload: @external_target_payload,
+      organization: @organization,
+      tolerance: @tolerance
+    ).source_year_totals
   end
 
   def normalized_year_money_hash(raw)

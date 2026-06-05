@@ -813,37 +813,11 @@ class ChangeSetApplicationService
     document = external_financial_target_document
     return {} unless document&.xlsx_finance?
 
-    payload = document.parsed_payload || {}
-    object_group_totals = source_totals_from_object_groups(payload)
-    return object_group_totals if object_group_totals.present?
-
-    program_total_row = Array(payload["rows"]).detect do |row|
-      row["row_type"].to_s == "PROGRAM_TOTAL_ROW" && row["funding"].present?
-    end
-    funding = program_total_row&.fetch("funding", nil) || {}
-    source_totals_from_funding_hash(funding)
-  rescue ArgumentError
-    {}
-  end
-
-  def source_totals_from_object_groups(payload)
-    Array(payload["object_groups"]).each_with_object({}) do |group, result|
-      source_totals_from_funding_hash(group["funding"]).each do |key, amount|
-        result[key] = (result[key] || BigDecimal("0")) + amount
-      end
-    end
-  end
-
-  def source_totals_from_funding_hash(funding)
-    (funding || {}).to_h.each_with_object({}) do |(key, amount), result|
-      year, source_type = key.to_s.split("::", 2)
-      next if year.blank? || source_type.blank?
-
-      normalized_source = funding_source_value(source_type)
-      next if normalized_source == "UNKNOWN"
-
-      result[[year.to_i, normalized_source]] = BigDecimal(amount.to_s)
-    end
+    ExternalTargetSourceTotalResolver.new(
+      payload: document.parsed_payload || {},
+      organization: @change_set.program_version.municipal_program.organization,
+      tolerance: AgentSetting.for_organization!(@change_set.program_version.municipal_program.organization).money_tolerance_rub
+    ).source_year_totals
   end
 
   def root_source_totals(target_version)

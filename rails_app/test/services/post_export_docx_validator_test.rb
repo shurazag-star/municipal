@@ -106,6 +106,43 @@ class PostExportDocxValidatorTest < ActiveSupport::TestCase
     assert_equal "xlsx_finance", result.dig("external_target", "document_type")
   end
 
+  test "uses final Excel totals to reconcile passport source checks" do
+    @root.funding_lines.destroy_all
+    @root.funding_lines.create!(year: 2026, source_type: "REGIONAL_BUDGET", amount_rub: "80.00")
+    @root.funding_lines.create!(year: 2026, source_type: "LOCAL_BUDGET", amount_rub: "20.00")
+    excel_target = SourceDocument.create!(
+      organization: @user.organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "final_totals" => { "2026" => "100.00" },
+        "object_groups" => [
+          { "funding" => { "2026::REGIONAL_BUDGET" => "80.00" } },
+          { "funding" => { "2026::LOCAL_BUDGET" => "40.00" } }
+        ]
+      }
+    )
+
+    result = PostExportDocxValidator.new(
+      program_version: @version,
+      generated_docx_attachment: @document.file_attachment,
+      external_target_document: excel_target,
+      parser_client: FakeParserClient.new(
+        "passport_totals_by_year" => { "2026" => "100.00" },
+        "passport_amounts" => { "2026::REGIONAL_BUDGET" => "80.00", "2026::LOCAL_BUDGET" => "20.00" },
+        "passport_source_total_column_amounts" => { "REGIONAL_BUDGET" => "80.00", "LOCAL_BUDGET" => "20.00" },
+        "passport_grand_total_column_amount" => "100.00"
+      ),
+      visual_renderer: FakeVisualRenderer.new("valid")
+    ).validate
+
+    assert_equal "valid", result["status"]
+    assert_empty result["errors"]
+    assert_equal "20.00", result.dig("external_target", "passport_sources", "2026::LOCAL_BUDGET", "expected_rub")
+  end
+
   test "returns invalid when object funding rows do not match target version" do
     object = @version.program_nodes.create!(
       node_type: "object",
