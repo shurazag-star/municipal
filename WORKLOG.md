@@ -5565,3 +5565,95 @@
 - Тестовая загрузка реальных документов Шатуры пока не выполнялась: пользователь отдельно передаст документы для теста.
 - `/admin` сейчас возвращает `204`, потому что в проекте нет view для `admin/dashboard#index`; рабочий admin root `/` открывается и это не блокирует кабинет агента.
 - Пароли не записывались в репозиторий и не выводились в чат/WORKLOG.
+
+## 2026-06-05 23:13:50 MSK — Shatura DOCX export calculation fix
+
+### Выполнено
+
+- Исправлен production-блокер Shatura, где агент формировал draft, но не доходил до корректного финального DOCX по Excel-целевой модели.
+- Видимые residual-строки Excel теперь не схлопываются в существующую родительскую строку:
+  - водоснабжение вставляется как `2.1.8` в таблицу 4;
+  - канализация вставляется как `2.1.7` в таблицу 5;
+  - теплоснабжение остается в своем контексте таблицы 6.
+- При выборе родителя для новых residual-строк теперь сначала используется точное совпадение подпрограммы, и только затем fallback по `finance_table_index`.
+- Для зеркальных строк `activity`/`object` с одним кодом новый объект теперь подвешивается к структурному `activity`, чтобы нумерация продолжалась от существующих дочерних строк.
+- Пересчет текста периода исполнения включен только для диапазонов внутри периода программы (`2026-2028` -> `2027-2028`), но исторические одиночные периоды вроде `2023` не переписываются.
+- Вставленные DOCX-строки теперь форматируют крупные суммы с пробелом-разделителем тысяч, не меняя форматирование обычных существующих ячеек.
+- Изменения закоммичены и запушены в `main`: `e216309 Fix Shatura visible residual DOCX export`.
+- Production Railway deploy выполнен вручную:
+  - web deployment `7c50ec29-eac4-4dea-aced-16bbdac5e01c` -> `SUCCESS`;
+  - worker deployment `34bc39a1-8536-4338-b58f-5abe7d9a3fa5` -> `SUCCESS`.
+
+### Измененные файлы
+
+- `rails_app/app/services/external_source_matcher.rb`
+- `rails_app/app/services/change_set_application_service.rb`
+- `rails_app/app/services/docx_patch_plan_builder.rb`
+- `parser_worker/municipal_agent/docx_patcher.py`
+- `rails_app/test/services/external_source_matcher_test.rb`
+- `rails_app/test/services/change_set_application_service_test.rb`
+- `rails_app/test/services/docx_patch_plan_builder_test.rb`
+- `parser_worker/tests/test_docx_patcher.py`
+
+### Проверки
+
+- Rails targeted:
+  - `bundle exec ruby bin/rails test test/services/docx_patch_plan_builder_test.rb test/services/change_set_application_service_test.rb test/services/external_source_matcher_test.rb`
+  - результат: `60 runs, 244 assertions, 0 failures, 0 errors`.
+- Parser targeted:
+  - `pytest tests/test_docx_patcher.py`
+  - результат: `12 passed`.
+- Full Rails suite:
+  - `bundle exec ruby bin/rails test`
+  - результат: `302 runs, 1927 assertions, 0 failures, 0 errors`.
+- Full parser suite:
+  - `pytest`
+  - результат: `55 passed, 10 skipped`.
+- Локальный Shatura end-to-end на реальных файлах из `/Users/aleksandrzagrekov/Desktop/МП для автоматизации`:
+  - статус `applied`;
+  - post-export `valid`;
+  - row counts совпали с эталоном `проект изменений МП_май_2026.docx`: `[26, 29, 28, 26, 55, 75, 302, 39, 21, 9, 37]`;
+  - ключевые строки совпали по нумерации, таблицам, периодам и суммам: `2.1.8`, `2.1.7`, `1.7.2`, `1.8.2`;
+  - исторический период `2023` для строки энергоресурсов сохранен.
+- Production health:
+  - `curl https://municipal-web-production.up.railway.app/up` -> `ok`.
+- Production Shatura recalculation:
+  - created `AnalysisSession #56`;
+  - created/applied `ChangeSet #49`;
+  - target version `#84`;
+  - `export_ready=true`;
+  - `change_items=112`;
+  - `new_object_items=12`;
+  - `unresolved_items=0`;
+  - `docx_patch`: `applied_count=698`, `inserted_count=4`, `inserted_rows_count=12`, `skipped_count=0`, `skipped_insertions_count=0`, `text_applied_count=19`, `text_skipped_count=0`;
+  - post-export `valid`, `errors=[]`;
+  - agent self-check `passed`;
+  - independent verifier `passed`.
+- Production Shatura key nodes:
+  - `2.1.8`, table `4`, row `35`, period `2027-2028`, local budget `2027=34386810.0`, `2028=23247950.0`;
+  - `2.1.7`, table `5`, row `47`, period `2027-2028`, local budget `2027=34046700.0`, `2028=65918540.0`;
+  - `1.7.2`, table `6`, row `106`, period `2026`, local budget `11245920.0`;
+  - `1.8.2`, table `6`, row `115`, period `2027`, local budget `1106000.0`.
+- Production Lyubertsy isolation:
+  - counters before and after Shatura recalculation stayed identical:
+  - `users=2`, `source_documents=3`, `municipal_programs=1`, `program_versions=2`, `analysis_sessions=1`, `change_sets=1`.
+- HTTP smoke:
+  - Shatura worker login -> `302`, `/employee` -> `200`, markers found;
+  - Lyubertsy worker login -> `302`, `/employee` -> `200`, markers found.
+
+### Запуски и процессы
+
+- Для локальных тестов использовались Docker Compose services `postgres`, `redis`, `parser_worker` и временные `web-run` контейнеры.
+- Railway CLI `up` для web/worker после upload завершался с network timeout, но deployment ids были созданы и подтверждены через Railway API как `SUCCESS`.
+- Один ошибочный polling shell с неправильным inline Python был дождался завершения и не оставлен активным.
+- Production runner запускался через `railway ssh` в `municipal-web`.
+
+### Результат
+
+- Shatura agent теперь формирует финальный валидный DOCX по загруженному Excel без ручного вмешательства.
+- Люберцы не изменялись и продолжают открывать рабочий кабинет.
+
+### Риски и замечания
+
+- В локальном сравнении с эталонным DOCX остались косметические отличия формата нулей в некоторых новых строках (`0,00` вместо `0,0`); post-export validator и финансовые суммы это не блокируют.
+- В локальной development DB созданы несколько debug-организаций `Локальная Шатура debug` для end-to-end воспроизведения; production они не затрагивают.
