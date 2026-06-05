@@ -7,7 +7,7 @@ class AgentAutonomousResolver
     @change_set = change_set
     @user = user
     @organization = change_set.program_version.municipal_program.organization
-    @policy = @organization.settings["source_priority_policy"].presence || "xlsx_over_pdf"
+    @policy = source_priority_policy_from_session || @organization.settings["source_priority_policy"].presence || "xlsx_over_pdf"
   end
 
   def resolve!
@@ -33,6 +33,18 @@ class AgentAutonomousResolver
   end
 
   private
+
+  def source_priority_policy_from_session
+    session = @change_set.analysis_session
+    policy = session&.source_policy&.fetch("source_priority_policy", nil).presence
+    return policy if policy.in?(%w[xlsx_over_pdf pdf_over_xlsx])
+
+    priority = session&.summary&.dig("source_resolution", "priority")
+    return "pdf_over_xlsx" if priority == "pdf_agreement"
+    return "xlsx_over_pdf" if priority == "xlsx_finance"
+
+    nil
+  end
 
   def apply_source_policy!
     conflicts = Array(@change_set.analysis_session&.summary&.fetch("source_conflicts", nil))
@@ -197,27 +209,33 @@ class AgentAutonomousResolver
   def safe_new_object_reference?(item, reference)
     return false if reference["group_status"].to_s == "UNASSIGNED_RESIDUAL"
 
-    reference["group_status"].to_s == "GROUPED_OBJECT" &&
+    reference["group_status"].to_s.in?(%w[GROUPED_OBJECT ACTIVITY_AGGREGATE]) &&
       reference["object_code"].present? &&
       reference["parent_activity_code"].present? &&
       item.new_value.present? &&
       !numeric_label?(item.new_value) &&
-      parent_activity_exists?(reference["parent_activity_code"])
+      parent_activity_exists?(reference["parent_activity_code"], activity_aggregate: reference["group_status"].to_s == "ACTIVITY_AGGREGATE")
   end
 
-  def parent_activity_exists?(raw_code)
+  def parent_activity_exists?(raw_code, activity_aggregate: false)
     parsed = parse_external_parent_code(raw_code)
     return false unless parsed
 
-    parent_candidates(@change_set.program_version.program_nodes, parsed).any?
+    parent_candidates(@change_set.program_version.program_nodes, parsed, activity_aggregate: activity_aggregate).any?
   end
 
-  def parent_candidates(scope, parsed)
+  def parent_candidates(scope, parsed, activity_aggregate: false)
+    return main_activity_parent_candidates(scope, parsed) if activity_aggregate
+
     activity_candidates = scoped_parent_candidates(scope, parsed[:activity_code])
     activity_matches = activity_candidates.select { |node| parent_activity_matches?(node, parsed) }
     return activity_matches if activity_matches.any?
     return activity_candidates if parsed[:activity_code].present? && activity_candidates.one?
 
+    main_activity_parent_candidates(scope, parsed)
+  end
+
+  def main_activity_parent_candidates(scope, parsed)
     main_candidates = scoped_parent_candidates(scope, parsed[:main_activity_code])
     main_matches = main_candidates.select { |node| parent_main_activity_matches?(node, parsed) }
     return main_matches if main_matches.any?
@@ -233,17 +251,27 @@ class AgentAutonomousResolver
   end
 
   def parent_activity_matches?(node, parsed)
-    subprogram_matches = parsed[:subprogram_display].blank? || node_subprogram_display(node).to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = node_subprogram_matches?(node, parsed)
     activity_matches = node.code.to_s == parsed[:activity_code].to_s || node.display_number.to_s == parsed[:activity_display].to_s
 
     subprogram_matches && activity_matches
   end
 
   def parent_main_activity_matches?(node, parsed)
-    subprogram_matches = parsed[:subprogram_display].blank? || node_subprogram_display(node).to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = node_subprogram_matches?(node, parsed)
     main_matches = node.code.to_s == parsed[:main_activity_code].to_s || node.display_number.to_s == parsed[:main_activity_display].to_s
 
     subprogram_matches && main_matches
+  end
+
+  def node_subprogram_matches?(node, parsed)
+    expected = parsed[:subprogram_display].to_s
+    return true if expected.blank?
+
+    return true if node_subprogram_display(node).to_s == expected
+
+    shifted_expected = expected.to_i - 1 if expected.match?(/\A\d+\z/) && expected.to_i > 1
+    shifted_expected.present? && node_finance_table_index(node).to_s == shifted_expected.to_s
   end
 
   def activity_parent_candidate?(node)
@@ -259,12 +287,17 @@ class AgentAutonomousResolver
 
   def node_subprogram_display(node)
     ancestor_of_type(node, "subprogram")&.display_number.presence ||
-      node.metadata.to_h["finance_table_index"].presence&.to_s
+      node_finance_table_index(node)&.to_s
+  end
+
+  def node_finance_table_index(node)
+    node.metadata.to_h["finance_table_index"].presence ||
+      ancestor_of_type(node, "main_activity")&.metadata.to_h["finance_table_index"].presence
   end
 
   def parse_external_parent_code(raw_code)
     digits = raw_code.to_s.gsub(/\D/, "")
-    return nil if digits.length < 7 || !digits.start_with?("10")
+    return nil if digits.length < 7
 
     subprogram = digits[2].to_i
     main_activity = digits[3, 2].to_i

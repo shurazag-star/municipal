@@ -43,7 +43,7 @@ class ChangeSetBuilderTest < ActiveSupport::TestCase
     assert_equal 61, item.source_reference["row_number"]
   end
 
-  test "creates zeroing amount update when Excel target omits old DOCX funding key" do
+  test "does not zero DOCX funding key from years outside Excel target scope" do
     @node.funding_lines.create!(year: 2027, source_type: "LOCAL_BUDGET", amount_rub: "200.00")
     document = excel_document!("ВЗУ Черусти", "1000004207.1000005123", "2027::LOCAL_BUDGET" => "180.00")
     session = analysis_session!(document)
@@ -51,24 +51,33 @@ class ChangeSetBuilderTest < ActiveSupport::TestCase
 
     change_set = ChangeSetBuilder.new(analysis_session: session, match_results: match_results).build!
 
-    items = change_set.change_items.order(:year).to_a
-    assert_equal 2, items.size
-    zeroing = items.first
-    assert_equal 2026, zeroing.year
-    assert_equal "LOCAL_BUDGET", zeroing.source_type
-    assert_equal BigDecimal("100.00"), zeroing.old_amount_rub
-    assert_equal BigDecimal("0"), zeroing.new_amount_rub
-    assert_equal BigDecimal("-100.00"), zeroing.delta_rub
-    assert_equal "zeroing", zeroing.source_reference["amount_mode"]
-    assert_equal true, zeroing.source_reference["target_model_absent_in_excel"]
-
-    update = items.second
+    update = change_set.change_items.sole
     assert_equal 2027, update.year
     assert_equal BigDecimal("200.00"), update.old_amount_rub
     assert_equal BigDecimal("180.00"), update.new_amount_rub
+    assert_nil change_set.change_items.find_by(year: 2026)
+  end
+
+  test "creates zeroing amount update when Excel target omits old DOCX funding key inside target year scope" do
+    @organization.update!(settings: @organization.settings.merge("excel_target_zero_absent" => true))
+    @node.funding_lines.create!(year: 2026, source_type: "REGIONAL_BUDGET", amount_rub: "200.00")
+    document = excel_document!("ВЗУ Черусти", "1000004207.1000005123", "2026::LOCAL_BUDGET" => "150.00")
+    session = analysis_session!(document)
+    match_results = ExternalSourceMatcher.new(analysis_session: session, source_document: document).match!
+
+    change_set = ChangeSetBuilder.new(analysis_session: session, match_results: match_results).build!
+
+    zeroing = change_set.change_items.find_by!(source_type: "REGIONAL_BUDGET")
+    assert_equal 2026, zeroing.year
+    assert_equal BigDecimal("200.00"), zeroing.old_amount_rub
+    assert_equal BigDecimal("0"), zeroing.new_amount_rub
+    assert_equal BigDecimal("-200.00"), zeroing.delta_rub
+    assert_equal "zeroing", zeroing.source_reference["amount_mode"]
+    assert_equal true, zeroing.source_reference["target_model_absent_in_excel"]
   end
 
   test "creates zeroing updates for DOCX objects fully absent from Excel target" do
+    @organization.update!(settings: @organization.settings.merge("excel_target_zero_absent" => true))
     absent = @version.program_nodes.create!(
       node_type: "object",
       name: "ВЗУ Рошаль",
@@ -148,9 +157,7 @@ class ChangeSetBuilderTest < ActiveSupport::TestCase
     assert_equal "unresolved", item.agent_resolution_status
     assert_equal "Новый объект", item.new_value
     assert_equal BigDecimal("250.00"), item.new_amount_rub
-    zeroing = change_set.change_items.find_by!(change_type: "amount_update")
-    assert_equal @node, zeroing.program_node
-    assert_equal BigDecimal("0"), zeroing.new_amount_rub
+    assert_nil change_set.change_items.find_by(change_type: "amount_update")
   end
 
   test "creates transfer pair as two autonomous amount updates" do

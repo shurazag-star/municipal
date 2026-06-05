@@ -331,6 +331,7 @@ class ExternalSourceMatcher
   def deterministic_excel_target_group?(group)
     return false unless @source_document.document_type == "xlsx_finance"
     return true if group["status"] == "UNASSIGNED_RESIDUAL" && group["parent_activity_code"].present?
+    return true if group["status"] == "ACTIVITY_AGGREGATE" && group["parent_activity_code"].present?
 
     group["status"] == "GROUPED_OBJECT" &&
       group["parent_activity_code"].present? &&
@@ -435,7 +436,8 @@ class ExternalSourceMatcher
     parsed = parse_external_parent_code(group["parent_activity_code"])
     return object_nodes unless parsed
 
-    object_nodes.select { |node| node_matches_parent_activity?(node, parsed) }
+    matches = object_nodes.select { |node| node_matches_parent_activity?(node, parsed) }
+    matches
   end
 
   def structural_nodes
@@ -521,7 +523,7 @@ class ExternalSourceMatcher
 
   def parse_external_parent_code(raw_code)
     digits = raw_code.to_s.gsub(/\D/, "")
-    return nil if digits.length < 7 || !digits.start_with?("10")
+    return nil if digits.length < 7
 
     subprogram = digits[2].to_i
     main_activity = digits[3, 2].to_i
@@ -530,6 +532,8 @@ class ExternalSourceMatcher
 
     {
       subprogram_display: subprogram.to_s,
+      main_activity_code: format("%02d", main_activity),
+      main_activity_display: main_activity.to_s,
       activity_code: format("%02d.%02d", main_activity, activity),
       activity_display: "#{main_activity}.#{activity}"
     }
@@ -539,11 +543,20 @@ class ExternalSourceMatcher
     activity = activity_parent_candidate?(node) ? node : ancestor_of_type(node, "activity")
     return false unless activity
 
-    subprogram = ancestor_of_type(activity, "subprogram")
-    subprogram_matches = node_subprogram_display(activity).to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = node_subprogram_matches?(activity, parsed)
     activity_matches = activity.code.to_s == parsed[:activity_code].to_s ||
       normalize_name(activity.name).include?(normalize_name(parsed[:activity_code]))
     subprogram_matches && activity_matches
+  end
+
+  def node_subprogram_matches?(node, parsed)
+    expected = parsed[:subprogram_display].to_s
+    return true if expected.blank?
+
+    return true if node_subprogram_display(node).to_s == expected
+
+    shifted_expected = expected.to_i - 1 if expected.match?(/\A\d+\z/) && expected.to_i > 1
+    shifted_expected.present? && node_finance_table_index(node).to_s == shifted_expected.to_s
   end
 
   def activity_parent_candidate?(node)
@@ -559,7 +572,12 @@ class ExternalSourceMatcher
 
   def node_subprogram_display(node)
     ancestor_of_type(node, "subprogram")&.display_number.presence ||
-      node.metadata.to_h["finance_table_index"].presence&.to_s
+      node_finance_table_index(node)&.to_s
+  end
+
+  def node_finance_table_index(node)
+    node.metadata.to_h["finance_table_index"].presence ||
+      ancestor_of_type(node, "main_activity")&.metadata.to_h["finance_table_index"].presence
   end
 
   def ancestor_of_type(node, node_type)

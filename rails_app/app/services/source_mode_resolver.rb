@@ -41,9 +41,10 @@ class SourceModeResolver
 
   attr_reader :organization
 
-  def initialize(organization:, requested_mode: nil)
+  def initialize(organization:, requested_mode: nil, user: nil)
     @organization = organization
     @requested_mode = requested_mode
+    @user = user
   end
 
   def mode
@@ -104,6 +105,7 @@ class SourceModeResolver
     {
       "requested_mode" => requested_mode,
       "resolved_mode" => mode,
+      "source_priority_policy" => source_priority_policy,
       "xlsx_role" => self.class.xlsx_target_mode?(mode) ? "target_model" : "ignored",
       "pdf_role" => pdf_role,
       "double_count_guard" => mode == "xlsx_target_with_pdf_evidence" ? "pdf_evidence_only" : "single_calculation_source"
@@ -113,6 +115,8 @@ class SourceModeResolver
   private
 
   def configured_mode
+    return nil if @user&.user?
+
     self.class.normalize(organization.settings["default_source_mode"])
   end
 
@@ -133,8 +137,12 @@ class SourceModeResolver
     end
   end
 
+  def source_priority_policy
+    mode == "pdf_patch" ? "pdf_over_xlsx" : "xlsx_over_pdf"
+  end
+
   def latest_excel
-    @latest_excel ||= organization.source_documents
+    @latest_excel ||= source_documents
       .xlsx_finance
       .where(status: "parsed")
       .order(updated_at: :desc, id: :desc)
@@ -142,10 +150,17 @@ class SourceModeResolver
   end
 
   def pdf_documents
-    @pdf_documents ||= organization.source_documents
+    @pdf_documents ||= source_documents
       .pdf_agreement
       .where(status: "parsed")
       .order(:created_at, :id)
       .to_a
+  end
+
+  def source_documents
+    scope = organization.source_documents
+    return scope unless @user&.user?
+
+    scope.where(created_by: @user)
   end
 end

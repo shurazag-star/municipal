@@ -321,6 +321,43 @@ class AgentAutonomousResolverTest < ActiveSupport::TestCase
     assert_equal "confirmed", item.status
   end
 
+  test "resolves activity aggregate new rows under shifted main activity code" do
+    @version.program_nodes.create!(
+      node_type: "object",
+      code: "01",
+      display_number: "1",
+      name: "Основное мероприятие 01. Создание условий для реализации полномочий органов местного самоуправления",
+      metadata: { "finance_table_index" => 5 }
+    )
+    item = @change_set.change_items.create!(
+      change_type: "new_object",
+      status: "draft",
+      field_name: "object",
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      new_value: "Обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+      new_amount_rub: "5574845.99",
+      delta_rub: "5574845.99",
+      source_reference: {
+        "document_type" => "xlsx_finance",
+        "group_status" => "ACTIVITY_AGGREGATE",
+        "match_status" => "MISSING_IN_DOCX",
+        "group_key" => "136010200000000::136010200000000::обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+        "parent_activity_code" => "136010200000000",
+        "object_code" => "136010200000000",
+        "object_name" => "Обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+        "row_number" => 67
+      },
+      confidence: "0.0"
+    )
+
+    AgentAutonomousResolver.new(change_set: @change_set, user: @user).resolve!
+
+    assert_equal "resolved", item.reload.agent_resolution_status
+    assert_equal "confirmed", item.status
+    assert_equal "new_object_parent_code", item.agent_resolution_evidence["resolution_pass"]
+  end
+
   test "blocks amount updates mapped to non-financial result nodes" do
     result_node = @version.program_nodes.create!(
       node_type: "result",

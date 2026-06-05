@@ -145,6 +145,102 @@ class DocxPatchPlanBuilderTest < ActiveSupport::TestCase
     assert_equal BigDecimal("475000.00"), BigDecimal(grand_total.fetch("amount_rub"))
   end
 
+  test "finance total columns sum displayed rounded year values" do
+    node = @version.program_nodes.create!(
+      node_type: "activity",
+      name: "Мероприятие",
+      source_table_index: 2,
+      source_row_index: 10,
+      metadata: {
+        "docx_year_cell_indexes" => { "2026" => 5, "2027" => 6 },
+        "docx_total_cell_index" => 4,
+        "docx_unit_in_document" => "thousand_rub"
+      }
+    )
+    node.funding_lines.create!(
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "100004.09",
+      metadata: {
+        "source_table_index" => 2,
+        "source_row_index" => 11,
+        "source_cell_index" => 5,
+        "total_cell_index" => 4,
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    node.funding_lines.create!(
+      year: 2027,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "200003.88",
+      metadata: {
+        "source_table_index" => 2,
+        "source_row_index" => 11,
+        "source_cell_index" => 6,
+        "total_cell_index" => 4,
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    item = ChangeItem.new(program_node_id: node.id)
+
+    updates = DocxPatchPlanBuilder.new(
+      target_program_version: @version,
+      amount_items: [item],
+      new_object_result: {},
+      node_map: { node.id => node }
+    ).cell_updates
+
+    node_total = updates.detect { |update| update["reason"] == "node_total_column" }
+    line_total = updates.detect { |update| update["reason"] == "funding_line_total_column" }
+
+    assert_equal BigDecimal("300000.00"), BigDecimal(node_total.fetch("amount_rub"))
+    assert_equal BigDecimal("300000.00"), BigDecimal(line_total.fetch("amount_rub"))
+  end
+
+  test "infers missing funding year cell from adjacent years in the same row" do
+    node = @version.program_nodes.create!(
+      node_type: "object",
+      name: "Объект",
+      source_table_index: 2,
+      source_row_index: 10
+    )
+    node.funding_lines.create!(
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "100000.00",
+      metadata: { "source_table_index" => 2, "source_row_index" => 10, "source_cell_index" => 4 }
+    )
+    node.funding_lines.create!(
+      year: 2027,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "200000.00",
+      metadata: { "source_table_index" => 2, "source_row_index" => 10, "source_cell_index" => 5 }
+    )
+    node.funding_lines.create!(
+      year: 2028,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "300000.00",
+      metadata: { "source_table_index" => 2, "source_row_index" => 10 }
+    )
+    item = ChangeItem.new(program_node_id: node.id)
+
+    updates = DocxPatchPlanBuilder.new(
+      target_program_version: @version,
+      amount_items: [item],
+      new_object_result: {},
+      node_map: { node.id => node }
+    ).cell_updates
+
+    inferred = updates.detect do |update|
+      update["reason"] == "funding_line_year" &&
+        update["table_index"] == 2 &&
+        update["row_index"] == 10 &&
+        update["cell_index"] == 6
+    end
+
+    assert_equal BigDecimal("300000.00"), BigDecimal(inferred.fetch("amount_rub"))
+  end
+
   test "plans execution period text update from nonzero funding years" do
     node = @version.program_nodes.create!(
       node_type: "object",

@@ -47,7 +47,7 @@ class AnalysisSessionsController < ApplicationController
   def selected_source_documents
     ids = Array(params[:selected_source_document_ids]).reject(&:blank?).map(&:to_i)
     scope = current_organization.source_documents.where(document_type: %w[xlsx_finance pdf_agreement other], status: "parsed")
-    documents = ids.any? ? scope.where(id: ids) : SourceModeResolver.new(organization: current_organization).calculation_documents
+    documents = ids.any? ? scope.where(id: ids) : SourceModeResolver.new(organization: current_organization, user: current_user).calculation_documents
     return documents if ids.empty? || documents.size == ids.uniq.size
 
     raise ActiveRecord::RecordNotFound
@@ -58,7 +58,7 @@ class AnalysisSessionsController < ApplicationController
     if ids.any?
       documents = Array(source_documents)
       source_mode = SourceModeResolver.normalize(params[:source_mode]) || inferred_mode_for_documents(documents) || "auto"
-      resolver_summary = SourceModeResolver.new(organization: current_organization, requested_mode: source_mode).summary
+      resolver_summary = SourceModeResolver.new(organization: current_organization, requested_mode: source_mode, user: current_user).summary
       calculation_documents = if SourceModeResolver.xlsx_target_mode?(source_mode)
         documents.select(&:xlsx_finance?)
       elsif source_mode == "pdf_patch"
@@ -74,7 +74,7 @@ class AnalysisSessionsController < ApplicationController
       )
     end
 
-    SourceModeResolver.new(organization: current_organization).summary
+    SourceModeResolver.new(organization: current_organization, user: current_user).summary
   end
 
   def inferred_mode_for_documents(documents)

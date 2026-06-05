@@ -99,6 +99,106 @@ class ExternalSourceMatcherTest < ActiveSupport::TestCase
     assert_equal "101020100000000", results.first.source_reference["parent_activity_code"]
   end
 
+  test "matches activity aggregate row with municipal program prefix code" do
+    subprogram = @version.program_nodes.create!(
+      node_type: "subprogram",
+      name: "Подпрограмма 1",
+      display_number: "1"
+    )
+    activity = @version.program_nodes.create!(
+      parent: subprogram,
+      node_type: "object",
+      code: "01.05",
+      display_number: "1.4",
+      name: "Мероприятие 01.05 Информирование населения об основных событиях социально-экономического развития, общественно-политической жизни, освещение деятельности в печатных СМИ",
+      normalized_name: "мероприятие 0105 информирование населения об основных событиях социально экономического развития общественно политической жизни освещение деятельности в печатных сми"
+    )
+    document = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "sheet_name" => "Результат",
+        "object_groups" => [
+          {
+            "group_key" => "131010500000000::131010500000000::информирование населения",
+            "status" => "ACTIVITY_AGGREGATE",
+            "parent_activity_code" => "131010500000000",
+            "object_code" => "131010500000000",
+            "object_name" => "Информирование населения об основных событиях социально-экономического развития, общественно-политической жизни, освещение деятельности в печатных СМИ",
+            "funding" => { "2026::LOCAL_BUDGET" => "2000000.00" },
+            "rows" => [
+              {
+                "row_number" => 13,
+                "row_type" => "ACTIVITY_AGGREGATE_ROW",
+                "parent_activity_code" => "131010500000000",
+                "object_code" => "",
+                "object_name" => "Информирование населения об основных событиях социально-экономического развития, общественно-политической жизни, освещение деятельности в печатных СМИ",
+                "funding" => { "2026::LOCAL_BUDGET" => "2000000.00" },
+                "raw_values" => { "Наименование" => "Информирование населения об основных событиях социально-экономического развития, общественно-политической жизни, освещение деятельности в печатных СМИ" }
+              }
+            ]
+          }
+        ]
+      }
+    )
+    session = analysis_session!(document)
+
+    results = ExternalSourceMatcher.new(analysis_session: session, source_document: document, semantic_agent: nil).match!
+
+    assert_equal activity, results.first.program_node
+    assert_equal "ACTIVITY_AGGREGATE", results.first.source_reference["group_status"]
+    assert_equal 13, results.first.candidate.excel_row.row_number
+  end
+
+  test "matches activity aggregate row when municipal code subprogram is shifted from finance table index" do
+    activity = @version.program_nodes.create!(
+      parent: @program.current_version.program_nodes.find_by(name: @program.name),
+      node_type: "object",
+      code: "02.01",
+      display_number: "1.1",
+      name: "Мероприятие 02.01.Реализация на территориях муниципальных образований проектов граждан, сформированных в рамках практик инициативного бюджетирования",
+      normalized_name: "мероприятие 02 01 реализация на территориях муниципальных образований проектов граждан сформированных в рамках практик инициативного бюджетирования",
+      metadata: { "finance_table_index" => 2 }
+    )
+    document = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "object_groups" => [
+          {
+            "group_key" => "133020100000000::133020100000000::реализация на территориях муниципальных образований проектов граждан сформированных в рамках практик инициативного бюджетирования",
+            "status" => "ACTIVITY_AGGREGATE",
+            "parent_activity_code" => "133020100000000",
+            "object_code" => "133020100000000",
+            "object_name" => "Реализация на территориях муниципальных образований проектов граждан, сформированных в рамках практик инициативного бюджетирования",
+            "funding" => { "2026::REGIONAL_BUDGET" => "21440240.00" },
+            "rows" => [
+              {
+                "row_number" => 45,
+                "row_type" => "ACTIVITY_AGGREGATE_ROW",
+                "parent_activity_code" => "133020100000000",
+                "object_name" => "Реализация на территориях муниципальных образований проектов граждан, сформированных в рамках практик инициативного бюджетирования",
+                "funding" => { "2026::REGIONAL_BUDGET" => "21440240.00" }
+              }
+            ]
+          }
+        ]
+      }
+    )
+    session = analysis_session!(document)
+
+    result = ExternalSourceMatcher.new(analysis_session: session, source_document: document, semantic_agent: nil).match!.first
+
+    assert_equal activity, result.program_node
+    assert_equal "MATCH_FUZZY_CONFIDENT", result.match_status
+  end
+
   test "matches residual Excel row to existing parent activity when amount is already present" do
     subprogram = @version.program_nodes.create!(
       node_type: "subprogram",
@@ -576,6 +676,49 @@ class ExternalSourceMatcherTest < ActiveSupport::TestCase
       object_code: "4036470831.4036471081",
       row_number: 55,
       funding: { "2026::LOCAL_BUDGET" => "1757008.12" }
+    )
+    session = analysis_session!(document)
+
+    result = ExternalSourceMatcher.new(
+      analysis_session: session,
+      source_document: document,
+      semantic_agent: RaisingSemanticAgent.new
+    ).match!.first
+
+    assert_nil result.program_node
+    assert_equal "MISSING_IN_DOCX", result.match_status
+    assert result.requires_user_confirmation
+  end
+
+  test "does not call semantic agent for coded activity aggregate rows" do
+    document = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "object_groups" => [
+          {
+            "group_key" => "136010200000000::136010200000000::обеспечение деятельности муниципальных органов",
+            "status" => "ACTIVITY_AGGREGATE",
+            "parent_activity_code" => "136010200000000",
+            "object_code" => "136010200000000",
+            "object_name" => "Обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+            "funding" => { "2026::LOCAL_BUDGET" => "5574845.99" },
+            "rows" => [
+              {
+                "row_number" => 67,
+                "row_type" => "ACTIVITY_AGGREGATE_ROW",
+                "parent_activity_code" => "136010200000000",
+                "object_code" => "136010200000000",
+                "object_name" => "Обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+                "funding" => { "2026::LOCAL_BUDGET" => "5574845.99" }
+              }
+            ]
+          }
+        ]
+      }
     )
     session = analysis_session!(document)
 

@@ -28,9 +28,6 @@ def format_money_for_docx(
     quant = Decimal("1") if decimal_places == 0 else Decimal("1").scaleb(-decimal_places)
     amount = amount.quantize(quant, rounding=ROUND_HALF_UP)
     grouping_separator = _grouping_separator(source_cell_raw_value)
-    if grouping_separator is None and abs(amount) >= Decimal("1000"):
-        grouping_separator = " "
-
     if grouping_separator:
         formatted = f"{amount:,.{decimal_places}f}"
         return formatted.replace(",", grouping_separator).replace(".", ",")
@@ -84,6 +81,7 @@ def patch_docx(
     text_result = _apply_text_updates(document, payload["text_updates"])
     result_count_result = _update_result_counts_for_insertions(document, payload["insert_objects"])
     insertion_result = _insert_objects(document, payload["insert_objects"])
+    approval_result = _normalize_approval_header(document)
     document.save(str(output_path))
     return {
         "output_path": str(output_path),
@@ -104,6 +102,7 @@ def patch_docx(
         "skipped_insertions_count": len(insertion_result["skipped_insertions"]),
         "inserted": insertion_result["inserted"],
         "skipped_insertions": insertion_result["skipped_insertions"],
+        "approval_header_normalized": approval_result["normalized"],
     }
 
 
@@ -200,6 +199,11 @@ def _insert_objects(document, insert_objects: List[Dict[str, Any]]) -> Dict[str,
         anchor_tr = anchor_row._tr
         for _sequence, spec in sorted(group, key=lambda item: item[0]):
             try:
+                spec = dict(spec)
+                if not _clean_text(spec.get("responsible")):
+                    inferred_responsible = _neighbor_responsible_for_insert(table, insert_after_row_index, spec)
+                    if inferred_responsible:
+                        spec["responsible"] = inferred_responsible
                 template_row_index = int(spec.get("template_row_index") or insert_after_row_index)
                 template_tr = deepcopy(table.rows[template_row_index]._tr)
                 object_rows = list(spec.get("rows") or [])
@@ -410,6 +414,84 @@ def _populate_inserted_row(row, object_spec: Dict[str, Any], row_spec: Dict[str,
     for year, cell_index in year_cell_indices.items():
         amount = amounts_by_year.get(str(year), amounts_by_year.get(int(year), "0"))
         _set_money_cell(cells, int(cell_index), amount, unit, raw_cell_values.get(int(cell_index), ""))
+
+    responsible = _clean_text(object_spec.get("responsible"))
+    responsible_cell_index = _responsible_cell_index(cells, object_spec)
+    if responsible and responsible_cell_index is not None:
+        _set_cell_text_preserving_first_run(cells[responsible_cell_index], responsible)
+
+
+def _neighbor_responsible_for_insert(table, insert_after_row_index: int, object_spec: Dict[str, Any]) -> str:
+    column_index = _responsible_cell_index(table.rows[insert_after_row_index].cells, object_spec)
+    if column_index is None:
+        return ""
+
+    for row_index in range(insert_after_row_index + 1, len(table.rows)):
+        responsible = _responsible_text_from_row(table.rows[row_index], column_index)
+        if responsible:
+            return responsible
+
+    for row_index in range(insert_after_row_index, -1, -1):
+        responsible = _responsible_text_from_row(table.rows[row_index], column_index)
+        if responsible:
+            return responsible
+
+    return ""
+
+
+def _responsible_text_from_row(row, column_index: int) -> str:
+    if column_index >= len(row.cells):
+        return ""
+
+    text = _clean_text(row.cells[column_index].text)
+    return "" if text.upper() == "Х" else text
+
+
+def _responsible_cell_index(cells, object_spec: Dict[str, Any]) -> int | None:
+    explicit = object_spec.get("responsible_cell_index")
+    if explicit is not None:
+        try:
+            index = int(explicit)
+            return index if 0 <= index < len(cells) else None
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        total_cell_index = int(object_spec.get("total_cell_index") or 4)
+    except (TypeError, ValueError):
+        total_cell_index = 4
+    amount_indexes = [total_cell_index]
+    for value in (object_spec.get("year_cell_indices") or {}).values():
+        try:
+            amount_indexes.append(int(value))
+        except (TypeError, ValueError):
+            continue
+
+    candidate = len(cells) - 1
+    return candidate if candidate > max(amount_indexes, default=total_cell_index) else None
+
+
+def _normalize_approval_header(document) -> Dict[str, bool]:
+    if not document.tables:
+        return {"normalized": False}
+
+    try:
+        cell = document.tables[0].rows[0].cells[0]
+    except IndexError:
+        return {"normalized": False}
+
+    text = cell.text
+    normalized = re.sub(
+        r"от\s+\d{1,2}\.\d{1,2}\.\d{4}\s*(?:г\.?)?\s*№\s*[\wА-Яа-яЁё./\\-]+",
+        "от _______________ №__________",
+        text,
+        count=1,
+    )
+    if normalized == text:
+        return {"normalized": False}
+
+    _set_cell_text_preserving_first_run(cell, normalized)
+    return {"normalized": True}
 
 
 def _merge_inserted_object_identity_cells(rows: List[_Row]) -> List[int]:

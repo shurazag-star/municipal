@@ -25,6 +25,7 @@ def test_normalizes_known_budget_source_aliases():
 
 def test_normalizes_budget_roster_type_codes():
     assert normalize_budget_source("900100") == BudgetSource.LOCAL_BUDGET
+    assert normalize_budget_source("900203") == BudgetSource.FEDERAL_BUDGET
     assert normalize_budget_source("900302") == BudgetSource.REGIONAL_BUDGET
     assert normalize_budget_source("900304") == BudgetSource.REGIONAL_BUDGET
 

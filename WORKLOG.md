@@ -4979,3 +4979,523 @@
 - Excel покрывает `18.18%` объектов активной DOCX-программы. В режиме `xlsx_target` отсутствующие в Excel объекты DOCX обнуляются как часть целевой модели; это ожидаемое поведение, но его нужно понимать перед нажатием `Сделать актуальной`.
 - В worker logs остаются не критичные Rails warnings `Scoped order is ignored`; на текущий workflow они не повлияли.
 - Это машинная финансовая и структурная сверка, не юридическая ручная вычитка всех `136` страниц.
+
+## 2026-05-22 20:22:03 MSK
+
+### Выполнено
+
+- В корне проекта создана переносимая копия `муниципал копия`.
+- Содержимое проекта скопировано через `rsync` без удаления исходных файлов и без изменения кода.
+- Из копии исключены `.env`, возможные `.env.*`, `.git` и сама папка копии.
+- `.env.example` оставлен в копии как шаблон локальной настройки без секретных значений.
+
+### Изменённые файлы и директории
+
+- `муниципал копия/`
+- `WORKLOG.md`
+- `муниципал копия/WORKLOG.md`
+
+### Проверки
+
+- `pwd` — подтвержден рабочий каталог `/Users/aleksandrzagrekov/Desktop/Municipal`.
+- `git rev-parse --show-toplevel` — подтвержден корень репозитория.
+- `git status --short --branch` до копирования — рабочее дерево было чистым.
+- Прочитаны `WORKLOG.md`, `README.md`, `.gitignore`, `.env.example`.
+- Проверено, что `муниципал копия` до начала работы не существовала.
+- `rg -i --hidden --no-ignore 'rave|RAVE|rave_'` вне `.env` — найдены только запись в `WORKLOG.md` и случайное вхождение подстроки `rave` в локальном ActiveStorage key внутри `rails_app/log/test.log.0`; RAVE-credential значений не найдено.
+- `rsync -a --stats ...` — успешно скопировано `12732` файлов, общий размер копии около `2.0G`.
+- `find . -type f \( -name '.env' -o -name '.env.*' \)` — в исходнике найдены только `./.env` и `./.env.example`.
+- `find 'муниципал копия' -type f \( -name '.env' -o -name '.env.*' \) ! -name '.env.example'` — env-файлы с секретами в копии не найдены.
+- `find 'муниципал копия' ...` — `.git` в копии не найден.
+- `test -f 'муниципал копия/.env.example'` — шаблон env присутствует.
+- `du -sh 'муниципал копия'` — размер копии `2.0G`.
+- `find 'муниципал копия' -type f | wc -l` — `12732` файлов.
+- `git status --short --branch` после копирования — появилась только новая неотслеживаемая папка копии и обновление `WORKLOG.md`.
+
+### Запуски и процессы
+
+- Локальные dev-серверы, Docker, Rails, Sidekiq, браузерные проверки и фоновые сервисы не запускались.
+- Никаких процессов после задачи останавливать не требовалось.
+
+### Результат
+
+- Переносимая папка `муниципал копия` создана в корне проекта.
+- В копии нет рабочего `.env` и git-истории.
+- Для локального запуска на другом компьютере нужно создать новый `.env` из `.env.example` и заполнить локальные секреты/ключи отдельно.
+
+### Риски и замечания
+
+- Работоспособность приложения из копии не запускалась, потому что задача была только на создание копии без изменения кода.
+- В копию включены локальные артефакты и данные проекта, включая `storage`, `sample_documents`, `.venv`, Playwright-папки и изображения; это соответствует запросу скопировать всё кроме env-файла, но делает копию крупной.
+
+## 2026-05-27 16:00:18 MSK
+
+### Выполнено
+
+- Проведена диагностика рабочего кабинета сотрудника на production Railway для муниципальной программы Городского округа Люберцы.
+- Чат в кабинете очищался перед контрольными прогонами; загруженные документы сохранены.
+- Проверено, что в кабинете сотрудника видны три актуальных файла:
+  - порядок разработки PDF;
+  - текущая редакция DOCX;
+  - Excel-файл финансистов.
+- Включена и проверена логика авторежима: агент сам выбирает источник пересчета и в финальном прогоне выбрал Excel как целевую финансовую модель.
+- Исправлены ошибки универсальности workflow:
+  - employee-кабинет больше не подтягивает чужие/admin-файлы в подбор источников;
+  - команды на полное формирование DOCX не блокируются старыми черновиками;
+  - ответ `needs_clarification` теперь отображается как нормальный агентский вопрос, а не общая заглушка;
+  - добавлена свежая переобработка файлов при повторном полном формировании;
+  - исправлены парсинг Excel по новым колонкам, относительным годам и агрегатам мероприятий;
+  - исправлено сопоставление агрегированных строк Excel `ACTIVITY_AGGREGATE`;
+  - исправлена вставка нового мероприятия `01.02` в DOCX;
+  - новое мероприятие теперь попадает под правильное основное мероприятие в дереве, поэтому зависимые итоги пересчитываются;
+  - строки источников/итогов в зеркальных DOCX-таблицах синхронизируются без двойного счета;
+  - итоговые колонки DOCX теперь суммируют отображаемые округленные годовые значения;
+  - вставленные строки сохраняют ответственного исполнителя;
+  - формат чисел сохраняет стиль исходной ячейки без лишних пробелов-разделителей;
+  - шапка утверждения новой редакции нормализуется в `от _______________ №__________`.
+
+### Изменённые файлы
+
+- `parser_worker/municipal_agent/budget_sources.py`
+- `parser_worker/municipal_agent/docx_parser.py`
+- `parser_worker/municipal_agent/docx_patcher.py`
+- `parser_worker/municipal_agent/excel_parser.py`
+- `parser_worker/tests/test_docx_parser_fixture.py`
+- `parser_worker/tests/test_docx_patcher.py`
+- `parser_worker/tests/test_excel_parser_fixture.py`
+- `parser_worker/tests/test_money_and_sources.py`
+- `rails_app/app/controllers/analysis_sessions_controller.rb`
+- `rails_app/app/controllers/employee_workspace_controller.rb`
+- `rails_app/app/services/agent_autonomous_resolver.rb`
+- `rails_app/app/services/agent_context_builder.rb`
+- `rails_app/app/services/agent_intent_router.rb`
+- `rails_app/app/services/agent_memory_service.rb`
+- `rails_app/app/services/agent_response_composer.rb`
+- `rails_app/app/services/agent_tool_registry.rb`
+- `rails_app/app/services/agent_workflow_runner.rb`
+- `rails_app/app/services/analysis_session_runner.rb`
+- `rails_app/app/services/change_set_application_service.rb`
+- `rails_app/app/services/change_set_builder.rb`
+- `rails_app/app/services/docx_patch_plan_builder.rb`
+- `rails_app/app/services/external_source_matcher.rb`
+- `rails_app/app/services/program_tree_persister.rb`
+- `rails_app/app/services/reconciliation_builder.rb`
+- `rails_app/app/services/source_mode_resolver.rb`
+- Rails integration/service tests для перечисленных workflow.
+- `WORKLOG.md`
+
+### Проверки
+
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker` — `63 passed`.
+- `ruby -c` по измененным Rails service/test файлам — синтаксис OK.
+- `python3 -m py_compile parser_worker/municipal_agent/docx_patcher.py` — OK.
+- `git diff --check` — без ошибок.
+- `bundle exec rails test test/services/change_set_application_service_test.rb` локально не запустился: системный Ruby `2.6` не имеет Bundler `2.5.22`, а проект рассчитан на Ruby `3.3.6`.
+- Railway `/up` после финального деплоя — `ok`.
+- Browser/Playwright smoke-test рабочего кабинета:
+  - кабинет сотрудника открыт;
+  - чат очищен;
+  - три загруженных файла видны;
+  - агент принял запрос нормальным текстом;
+  - workflow завершился успешно;
+  - DOCX и отчет доступны по ссылкам.
+- Сравнение финального DOCX `changeset-37-version-17.docx` с эталоном `/Users/aleksandrzagrekov/Downloads/3_версия_2026_Приложение_к ПА _МП.docx`:
+  - таблиц: `23` в эталоне и `23` в генерации;
+  - raw/semantic diff остался только в таблице `9`;
+  - финансовые таблицы, новая строка `01.02`, ответственный исполнитель, итоговые строки и шапка утверждения совпали.
+
+### Railway и UI
+
+- Финальные deployment:
+  - `municipal-web` — `28743fc0-95a8-4dec-a7e0-a105e76ccabe`, `SUCCESS`;
+  - `municipal-worker` — `97494a0d-e8aa-4090-8b8c-a911c6dd5ee0`, `SUCCESS`.
+- Финальный UI-прогон:
+  - `ChangeSet #37`;
+  - `AgentTaskJob` с аргументом `38`;
+  - Sidekiq завершил задачу за `33981.0ms`;
+  - агент сообщил: Excel выбран автоматически как целевая модель, применено `8` изменений, обновлено `384` ячейки, вставлен `1` новый объект.
+
+### Результат
+
+- Агент в рабочем кабинете снова формирует новую редакцию DOCX в авторежиме, без ручного выбора Excel/PDF/manual.
+- Ответ пользователю идет от агентского слоя: с объяснением выбранного режима, примененных изменений, проверок и ссылками на файлы.
+- Финансовая часть результата теперь совпадает с проверенной редакцией по содержанию и структуре.
+
+### Остаточные риски и замечания
+
+- Единственное содержательное расхождение с приложенным эталоном осталось в таблице `9` по двум нефинансовым показателям:
+  - строка `1.2` — `Информационные материалы ... штука`;
+  - строка `1.3` — `Информационных теле-, радиоматериалов ... минута`.
+- Эти строки не являются финансовыми суммами, а текущий Excel workflow разбирает финансовую модель. В имеющейся логике нет источника, из которого можно достоверно вывести эти показательские значения без дополнительного документа-основания или отдельного парсера показателей.
+- В Railway logs остаются не критичные Rails warnings `Scoped order is ignored`; workflow они не блокируют.
+- Локальные dev-серверы не запускались. Открытые Railway MCP-процессы относятся к интеграции среды, отдельные процессы, запущенные вручную для задачи, не остались.
+
+## 2026-05-27 17:10:45 MSK — Ручной режим агента без Excel и финальная проверка готовности
+
+### Выполнено
+
+- Сохранен Excel из рабочего кабинета до удаления:
+  - `/tmp/municipal-agent-20260527/source-document-66.xlsx`
+  - `/tmp/municipal-agent-20260527/13 МП Развитие институтов гражданского общества.xlsx`
+- В production-кабинете сотрудника удален Excel из слота документа-основания.
+- Удалены ранее сгенерированные проекты изменений; оставлены только:
+  - PDF-порядок `порядок новый 2489-ПА_28.10.2025г пдф.pdf`;
+  - старая DOCX-редакция `2_версия_МП_от_20.02.2026_658-ПА_ГАСУ.docx`.
+- Чат очищен перед ручным тестом.
+- Проведен ручной e2e-сценарий без Excel:
+  - сначала агент корректно распознал пакет, но первый результат `ChangeSet #38` выявил дефект частичного пересчета итоговых строк;
+  - дефект исправлен переводом manual-mode на полный пересчет дерева программы;
+  - повторный результат `ChangeSet #39` сформировал DOCX и отчет без Excel.
+- После проверки тестовый `ChangeSet #39` удален, чат снова очищен; production DB подтверждает `change_sets: []`, Excel отсутствует.
+
+### Изменённые файлы в этой итерации
+
+- `rails_app/app/services/manual_instruction_batch_extractor.rb`
+- `rails_app/test/services/manual_instruction_batch_extractor_test.rb`
+- `rails_app/app/services/agent_tool_registry.rb`
+- `rails_app/app/services/change_set_application_service.rb`
+- `rails_app/app/services/agent_response_composer.rb`
+- `WORKLOG.md`
+
+### Проверки
+
+- `ruby -c rails_app/app/services/manual_instruction_batch_extractor.rb` — OK.
+- `ruby -c rails_app/app/services/agent_tool_registry.rb` — OK.
+- `ruby -c rails_app/app/services/change_set_application_service.rb` — OK.
+- `ruby -c rails_app/app/services/agent_response_composer.rb` — OK.
+- `ruby -c rails_app/test/services/manual_instruction_batch_extractor_test.rb` — OK.
+- `git diff --check` — без ошибок.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker -q` — `63 passed`.
+- `bundle exec ruby -Itest test/services/manual_instruction_batch_extractor_test.rb` локально не запустился: системный Ruby `2.6` не имеет Bundler `2.5.22`, проект рассчитан на Ruby `3.3.6`.
+- Railway `/up` после финального деплоя — `ok`.
+- Browser/Playwright e2e:
+  - ручной запрос отправлен без Excel;
+  - агент ответил естественным агентским текстом, без машинного отказа;
+  - `ChangeSet #39` создан, DOCX и отчет доступны;
+  - агент сообщил `384` обновленные ячейки и `1` вставленный объект;
+  - DOCX `changeset-39-version-19.docx` скачан и открыт для сравнения.
+- Production DB после очистки:
+  - `change_sets: []`;
+  - source documents: только `pdf_procedure #59` и `docx_program #65`.
+
+### Railway
+
+- Промежуточные деплои для ручного batch-workflow:
+  - `municipal-web` — `4a44bff6-a065-4def-9094-33374c4393a2`, `SUCCESS`;
+  - `municipal-worker` — `3a787dce-60c5-472e-af56-5c21f336e9b2`, `SUCCESS`.
+- Финальные деплои после исправления полного пересчета manual-mode:
+  - `municipal-web` — `96679798-40a9-4113-a4de-b8efffb09669`, `SUCCESS`;
+  - `municipal-worker` — `617c95af-a6a3-4ca0-b9ce-714488723e73`, `SUCCESS`.
+- В логах production не найдено блокирующих app-ошибок по финальному сценарию; есть обычные Redis/Postgres service logs и служебные checkpoint/connection сообщения.
+
+### Сравнение документов
+
+- `changeset-39-version-19.docx` полностью совпал с предыдущей успешной Excel-генерацией `changeset-37-version-17.docx`:
+  - таблиц: `23` и `23`;
+  - semantic diff: `0`.
+- С эталоном `/Users/aleksandrzagrekov/Downloads/3_версия_2026_Приложение_к ПА _МП.docx` осталось `3` расхождения, все в таблице `9`, все нефинансовые:
+  - строка `1.2` — показатель в штуках;
+  - строка `1.3` — показатель в минутах;
+  - строка `1.4` — показатель печатных листов/штук.
+- Финансовые строки, новая строка `01.02`, перенумерация `01.03`, ответственный исполнитель, итоги и паспортные суммы совпали.
+
+### Результат и риски
+
+- Excel/autodetect-сценарий по деньгам работает на проверенном комплекте.
+- Ручной пакетный режим без Excel теперь работает на том же наборе изменений и дает тот же финансовый DOCX, что Excel-сценарий.
+- Действия удаления/очистки в кабинете проверены: Excel и сгенерированные ChangeSet не подтягиваются после удаления.
+- Для продакшена готовность оценивается как готовность к контролируемому пилоту с обязательной человеческой проверкой DOCX перед утверждением.
+- Оставшийся риск: универсальность на произвольных муниципалитетах пока подтверждена только одним новым комплектом; нужен регрессионный набор из нескольких муниципалитетов.
+- Нефинансовые показатели таблицы 9 не пересчитываются автоматически без отдельного источника/парсера показателей или явной ручной инструкции по этим строкам.
+
+## 2026-05-27 17:47:49 MSK — Production Excel/autodetect smoke test на Railway
+
+### Выполнено
+
+- Через production-кабинет сотрудника Railway загружен Excel `13 МП Развитие институтов гражданского общества.xlsx` в слот `Документ-основание`.
+- Production DB подтвердил состояние документов:
+  - `pdf_procedure #59` — `parsed`;
+  - `docx_program #65` — `parsed`;
+  - `xlsx_finance #67` — `parsed`.
+- Через UI запущен агент в автоматическом режиме с задачей разобрать DOCX, порядок и Excel, пересчитать изменения и сформировать DOCX/отчет.
+- Агент создал `ChangeSet #40`, ответил естественным агентским текстом, без машинного отказа и без сообщения, что Excel не виден.
+- Из production UI скачаны:
+  - `.playwright-mcp/changeset-40-version-20.docx`;
+  - `.playwright-mcp/changeset-40-report.html`.
+- После проверки тестовый `ChangeSet #40` удален, чат очищен, загруженные PDF/DOCX/Excel оставлены.
+
+### Проверки
+
+- Railway `/up` — `ok`.
+- Browser/Playwright:
+  - загрузка Excel через слот `Документ-основание` прошла успешно;
+  - UI показал `Документ принят`;
+  - агент прошел этапы анализа и формирования Word-документа;
+  - агент сообщил `384` обновленных значения в Word-документе и `1` вставленный объект.
+- Production DB после очистки:
+  - `change_sets: []`;
+  - source documents: `pdf_procedure #59`, `docx_program #65`, `xlsx_finance #67`, все `parsed`.
+- Сравнение DOCX:
+  - `changeset-40-version-20.docx` семантически совпал с предыдущей Excel-генерацией `changeset-37-version-17.docx`: `0` различий по параграфам и таблицам;
+  - `changeset-40-version-20.docx` семантически совпал с ручной генерацией `changeset-39-version-19.docx`: `0` различий по параграфам и таблицам;
+  - по таблицам эталона `3_версия_2026_Приложение_к ПА _МП.docx` осталось `27` ячеечных различий, все они сосредоточены в трех известных нефинансовых строках таблицы 10: `1.2`, `1.3`, `1.4`;
+  - после исключения этих трех нефинансовых строк различий по таблицам с эталоном нет.
+
+### Ограничения и риски
+
+- Локальные тесты приложения не запускались по прямой просьбе пользователя.
+- Railway MCP для чтения логов вернул `Unauthorized`, локальный `railway` CLI отсутствует; текущая логовая проверка ограничена `/up`, production DB и UI/e2e-наблюдением.
+- Эталонный файл начинается с приложения, а сгенерированный агентом DOCX сохраняет вводную часть исходной старой редакции с постановлением; таблицы приложения сравнивались отдельно.
+- Нефинансовые строки `1.2`, `1.3`, `1.4` по-прежнему требуют отдельного источника/парсера показателей или явной ручной инструкции, если их нужно приводить к эталону автоматически.
+
+## 2026-05-28 19:57:08 MSK — Проверка удаления файлов в кабинете сотрудника на Railway
+
+### Выполнено
+
+- Проверен production-кабинет сотрудника после звонка клиента о невозможности удалить файлы.
+- Production DB перед проверкой уже был очищен: `SourceDocument.count = 0`, `ChangeSet.count = 0`.
+- Воспроизведен реальный баг: после полной очистки `/employee` возвращал `500 Internal Server Error`.
+- По production log найдена причина:
+  - `NoMethodError (undefined method id for nil)`;
+  - место: `AgentContextBuilder#program_for_document`, вызов из `reconciliation_context`;
+  - сценарий: у сотрудника нет `docx_program`, но контекст агента пытается искать программу по `program_document.id`.
+- Внесен минимальный guard в `AgentContextBuilder#program_for_document`: метод возвращает `nil`, если документа нет.
+- Фикс задеплоен на Railway:
+  - `municipal-web` deployment `7e9a969d-6964-4ce3-8e07-dea4ca8eb341` — `SUCCESS`;
+  - `municipal-worker` deployment `6bb85fac-4a77-4d72-8b89-c683292c1062` — `SUCCESS`.
+
+### Проверки в production UI
+
+- После деплоя `/up` — `ok`.
+- Авторизованный GET `/employee` после пустой очистки — `200`.
+- Browser/Playwright:
+  - `Очистить чат` — работает, документы не затрагивает;
+  - загрузка PDF в `Порядок разработки` — работает;
+  - загрузка DOCX в `Текущая редакция программы` — работает;
+  - загрузка XLSX в `Документ-основание` — работает;
+  - отдельное удаление XLSX через `Очистить поле Документ-основание` — работает;
+  - отдельное удаление DOCX через `Удалить актуальную программу` — работает, связанные program/change/session артефакты удаляются;
+  - отдельное удаление PDF через `Очистить поле Порядок разработки` — работает;
+  - повторная загрузка всех трех файлов — работает;
+  - `Удалить все документы` при заполненном кабинете — работает;
+  - `Удалить все документы` при уже пустом кабинете — работает.
+- Production DB после финальной очистки:
+  - `source_documents: 0`;
+  - `programs: 0`;
+  - `change_sets: 0`;
+  - `analysis_sessions: 0`;
+  - `knowledge_chunks: 0`;
+  - `manual_instructions: 0`.
+- Свежие environment logs после фикса не показали новых `NoMethodError`, `Completed 500`, `Internal Server Error` по `/employee`.
+
+### Локальные проверки
+
+- `ruby -c rails_app/app/services/agent_context_builder.rb` — `Syntax OK`.
+- `git diff --check` — без ошибок.
+
+### Изменённые файлы
+
+- `rails_app/app/services/agent_context_builder.rb`
+- `WORKLOG.md`
+
+### Замечания
+
+- Полный Rails test suite локально не запускался; проверка была production/e2e по запросу пользователя и синтаксическая локальная проверка измененного файла.
+- Для UI-загрузки использовались временные копии тестовых файлов в `.playwright-mcp`: `test-procedure.pdf`, `test-program.docx`, `test-finance.xlsx`.
+- `superpowers:systematic-debugging` не удалось открыть по указанному skill-path в текущем окружении, поэтому диагностика выполнена напрямую через production logs, Rails runner и браузерную проверку.
+
+## 2026-05-28 20:05:01 MSK — Контрольная проверка после фикса очистки кабинета
+
+### Выполнено
+
+- Проведена небольшая контрольная проверка без исправлений кода.
+- Осмотрены текущие незакоммиченные изменения и критичный diff по `AgentContextBuilder`/employee workspace.
+- Проверены production-сигналы после последнего деплоя.
+
+### Проверки
+
+- `git diff --check` — без ошибок.
+- Python compile для измененных parser worker модулей — OK.
+- `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker -q` — `63 passed`.
+- Ruby syntax check измененных Rails-файлов выполнен в Railway-контейнере на Ruby `3.3` — OK.
+- Локальный `ruby -c` на системном Ruby `2.6` непригоден для части файлов с Ruby 3 pattern matching, поэтому результат локального syntax check не использовался как ошибка проекта.
+- Railway `/up` — `ok`.
+- Production `AgentContextBuilder` для сотрудника на пустом кабинете строит контекст без падения:
+  - `active_loaded: false`;
+  - `sources: 0`;
+  - `reconciliation_count: 0`;
+  - `source_documents: 0`;
+  - `change_sets: 0`.
+- Свежие Railway environment logs не показали новых `NoMethodError`, `Completed 500`, `Internal Server Error` по проверяемым путям.
+
+### Результат
+
+- Новых критичных проблем в проверенном срезе не найдено.
+- Расчетная Python-часть по текущему набору тестов проходит.
+- Production-пустой кабинет после очистки остается доступным.
+
+### Риски
+
+- Rails test suite локально не запускался из-за неподходящего системного Ruby/Bundler; вместо этого синтаксис Rails-кода проверен в production-контейнере Railway.
+- Рабочее дерево остается большим незакоммиченным diff после предыдущих задач; перед релизной фиксацией нужен отдельный review/staging по файлам.
+
+## 2026-05-29 11:38:13 MSK — Исправление прерывающихся скачиваний готовой редакции
+
+### Выполнено
+
+- Проверена жалоба пользователя на прерывание скачивания `changeset-43-version-2.docx` из рабочего кабинета.
+- Подтверждено, что текущий `ChangeSet #43` в production имеет готовый DOCX размером `95 654` байта.
+- До исправления авторизованное скачивание проходило через цепочку:
+  - `/change_sets/43/export_docx`;
+  - ActiveStorage redirect внутри Rails;
+  - внешняя S3/Tigris-ссылка.
+- Production logs показали у клиента множество повторных GET на экспорт: Rails быстро отдавал `302`, после чего скачивание уходило за пределы приложения.
+- Причина локализована в архитектуре отдачи: браузер пользователя скачивал файл напрямую из внешнего object storage, а не с домена Railway-приложения; при нестабильном маршруте до storage это давало обрывы загрузки.
+- Исправлен экспорт готового DOCX и отчета: контроллер теперь отдает вложения напрямую через Rails `send_data`, без client-side редиректа на storage.
+
+### Изменённые файлы
+
+- `rails_app/app/controllers/change_sets_controller.rb`
+- `rails_app/test/integration/change_sets_test.rb`
+- `WORKLOG.md`
+
+### Проверки
+
+- `ruby -c rails_app/app/controllers/change_sets_controller.rb` — `Syntax OK`.
+- `ruby -c rails_app/test/integration/change_sets_test.rb` — `Syntax OK`.
+- `git diff --check -- rails_app/app/controllers/change_sets_controller.rb rails_app/test/integration/change_sets_test.rb` — без ошибок.
+- `bundle exec rails test test/integration/change_sets_test.rb` локально не запустился: системный Ruby `2.6` не имеет Bundler `2.5.22`, проект рассчитан на Ruby `3.3.6`.
+- До исправления: 10 авторизованных скачиваний DOCX с нашей стороны завершались успешно, но с `redirects=2` и финальной отдачей от внешнего storage.
+- Server-side проверка в production через Rails подтвердила целостность blob: `95 654` байта и тот же SHA-256, что у скачанного файла.
+- После исправления и деплоя: 10 авторизованных скачиваний `changeset-43-version-2.docx` завершились с `code=200`, `redirects=0`, размером `95 654` байта и одинаковым SHA-256.
+- После исправления `export_report` также вернул `code=200`, `redirects=0`, размер `8 533` байта.
+- Заголовки после фикса: `Content-Disposition: attachment`, корректный DOCX `Content-Type`, `Content-Length: 95654`, сервер `railway-edge`.
+- `unzip -t` скачанного DOCX — архив Word без ошибок.
+- Railway `/up` после деплоя — `ok`.
+- Production logs после фикса показывают `Completed 200 OK` для `/change_sets/43/export_docx` и `/change_sets/43/export_report` вместо прежнего пользовательского редиректа на storage.
+- `git diff --check` по всему рабочему дереву — без ошибок.
+
+### Railway
+
+- Деплой `municipal-web`:
+  - `f294c403-db32-44d3-ab64-23fef638ccbb` — `SUCCESS`.
+- `municipal-worker` не деплоился, потому что изменение находится только в web-контроллере экспорта.
+
+### Результат
+
+- Готовые редакции и отчеты теперь скачиваются с домена Railway-приложения без внешнего перехода браузера в object storage.
+- Менять регион Railway для этого симптома не потребовалось: проблема была не в генерации и не в файле, а в клиентской цепочке скачивания через storage.
+
+### Риски и замечания
+
+- Rails теперь скачивает blob из storage на сервере и отдает его пользователю сам. Для текущих DOCX/HTML-отчетов это безопасно по памяти, потому что файлы маленькие.
+- Если в будущем выгрузки станут большими, можно заменить `send_data` на потоковую отдачу или ActiveStorage proxy-controller с сохранением авторизации на export endpoint.
+- В рабочем дереве остаются более ранние незакоммиченные изменения предыдущих задач; в этой итерации к ним добавлены только файлы, перечисленные выше.
+
+## 2026-06-05 19:08:46 MSK — Tenant-профили для Люберец и Шатуры
+
+### Выполнено
+
+- Добавлен backend provisioning-слой для муниципальных tenant-профилей:
+  - один общий Rails/Railway деплой;
+  - отдельные `Organization` для Люберец и Шатуры;
+  - отдельные `AgentSetting`, пользователи, документы, чат, версии программы и проекты изменений;
+  - `default_source_mode` по умолчанию закрепляется как `auto`;
+  - Шатура может клонировать базовые настройки агента с Люберец, но последующие изменения одного агента не перезаписывают другой.
+- Добавлены безопасные rake-задачи:
+  - `municipal:provision_lyubertsy`;
+  - `municipal:provision_shatura`;
+  - `municipal:provision_tenants`.
+- Добавлены env-шаблоны для Shatura/Lyubertsy аккаунтов без секретов в репозитории.
+- README дополнен инструкцией, как пометить существующую production-организацию как Люберцы и создать отдельную Шатуру.
+- Добавлены regression-тесты на provisioning и изоляцию Люберцы/Шатура.
+
+### Изменённые файлы
+
+- `.env.example`
+- `README.md`
+- `WORKLOG.md`
+- `rails_app/app/services/municipal_tenant_provisioner.rb`
+- `rails_app/lib/tasks/municipal_tenants.rake`
+- `rails_app/test/integration/multi_tenant_access_test.rb`
+- `rails_app/test/services/municipal_tenant_provisioner_test.rb`
+
+### Проверки
+
+- RED TDD: `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test test/services/municipal_tenant_provisioner_test.rb` -> ожидаемое падение `NameError: uninitialized constant MunicipalTenantProvisioner`.
+- GREEN service tests: та же команда -> `3 runs, 17 assertions, 0 failures, 0 errors`.
+- Multi-tenant integration: `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test test/integration/multi_tenant_access_test.rb` -> `2 runs, 15 assertions, 0 failures, 0 errors`.
+- Расширенный targeted Rails suite: `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test test/services/municipal_tenant_provisioner_test.rb test/integration/multi_tenant_access_test.rb test/services/source_mode_resolver_test.rb` -> `11 runs, 56 assertions, 0 failures, 0 errors`.
+- Доступ/настройки/employee regression: `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test test/integration/agent_settings_test.rb test/integration/role_access_test.rb test/integration/employee_workspace_test.rb` -> `19 runs, 206 assertions, 0 failures, 0 errors`.
+- Rake tasks load: `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails -T municipal` -> задачи отображаются.
+- Ruby syntax в Rails-контейнере:
+  - `ruby -c app/services/municipal_tenant_provisioner.rb` -> `Syntax OK`;
+  - `ruby -c lib/tasks/municipal_tenants.rake` -> `Syntax OK`.
+- Python parser suite: `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker -q` -> `63 passed`.
+- `git diff --check -- rails_app/app/services/municipal_tenant_provisioner.rb rails_app/lib/tasks/municipal_tenants.rake rails_app/test/services/municipal_tenant_provisioner_test.rb rails_app/test/integration/multi_tenant_access_test.rb README.md .env.example` -> без ошибок.
+- Полный Rails suite: `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test` -> `292 runs, 1867 assertions, 7 failures, 1 errors`.
+
+### Результат
+
+- Tenant-разделение для Люберец и Шатуры реализовано на уровне существующей модели данных без отдельного кода/деплоя на муниципалитет.
+- Отдельные логины для Шатуры создаются через env-переменные и rake-задачу; реальные пароли не записываются в код, README или WORKLOG.
+- Точечные проверки новой функциональности проходят.
+
+### Запуски и процессы
+
+- Для Rails-тестов были запущены `docker-compose up -d postgres redis`; `parser_worker` был поднят Docker Compose как dependency test-run контейнеров.
+- После проверок остановлены только запущенные в этой задаче контейнеры: `postgres`, `redis`, `parser_worker`.
+- `sidekiq` уже находился в restart loop до начала задачи и не останавливался.
+
+### Риски и замечания
+
+- Production DB не изменялась. Для реального включения Шатуры нужно отдельно выполнить provisioning с production ENV и предварительно указать `LYUBERTSY_ORGANIZATION_ID` существующей организации Люберец.
+- Полный Rails suite сейчас не зелёный из-за существующего большого незакоммиченного diff в расчетах/DOCX: падения находятся в `ChangeSetApplicationServiceTest`, `ChangeSetBuilderTest`, `AgentAutonomousResolverTest`, `ExternalSourceMatcherTest`, `UniversalMunicipalRegressionTest`. Эти failures не относятся к добавленному tenant provisioning, но блокируют утверждение, что весь Rails suite проходит.
+
+## 2026-06-05 19:54:38 MSK — Закрытие Rails regression перед релизом Шатуры
+
+### Выполнено
+
+- Исправлены оставшиеся падения полной Rails suite перед production-релизом tenant-разделения.
+- Уточнено сопоставление Excel target по `parent_activity_code`: при распознанном родителе автосопоставление больше не уходит в объект с тем же именем в другом мероприятии/подпрограмме.
+- Сужено правило сдвига номера подпрограммы: смещение `N -> N-1` разрешено для `finance_table_index`, но не для реальной соседней подпрограммы.
+- Добавлено explicit-zero поведение для Excel target строк: если Excel сохраняет строку объекта с явным нулем, существующие DOCX funding keys обнуляются.
+- Для явного `xlsx_target` включено zeroing DOCX-источников, отсутствующих в Excel-целевой модели, без отдельного tenant setting.
+- Исправлена нумерация новых объектов: обычные новые объекты получают следующий дочерний номер, а activity aggregate строки используют номер мероприятия.
+- Для activity aggregate вставок восстановлены корректные DOCX total rows и родительский funding rollup без повторного захвата соседних строк-шаблонов.
+- Ручной `manual_instruction` сохраняет паспортный baseline по неизмененным годам при пересчете итоговой колонки.
+
+### Изменённые файлы
+
+- `rails_app/app/services/agent_autonomous_resolver.rb`
+- `rails_app/app/services/change_set_application_service.rb`
+- `rails_app/app/services/change_set_builder.rb`
+- `rails_app/app/services/external_source_matcher.rb`
+- `WORKLOG.md`
+
+### Проверки
+
+- Targeted regression set:
+  - `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test test/services/change_set_builder_test.rb:104 test/services/external_source_matcher_test.rb:477 test/services/agent_autonomous_resolver_test.rb:84 test/services/change_set_application_service_test.rb:598 test/services/change_set_application_service_test.rb:767 test/services/change_set_application_service_test.rb:1015 test/services/change_set_application_service_test.rb:1358` -> `7 runs, 52 assertions, 0 failures, 0 errors`.
+- Universal regression:
+  - `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test test/services/universal_municipal_regression_test.rb` -> `3 runs, 13 assertions, 0 failures, 0 errors`.
+- Полный Rails suite:
+  - `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bin/rails test` -> `292 runs, 1900 assertions, 0 failures, 0 errors`.
+- Python parser suite:
+  - `PYTHONPATH=parser_worker .venv/bin/python -m pytest parser_worker -q` -> `63 passed`.
+- `git diff --check` -> без ошибок.
+- Поиск секретов в diff/репозитории нашёл только шаблонные и тестовые значения (`password123`, `1111`, `sk-or-v1-test`, placeholders), реальных ключей не найдено.
+
+### Запуски и процессы
+
+- Для Rails-тестов использовались контейнеры `postgres`, `redis`, `parser_worker` через Docker Compose.
+- Контейнеры пока оставлены запущенными до завершения production-проверок и будут остановлены в конце задачи, кроме процессов, которые были запущены не этой итерацией.
+
+### Результат
+
+- Full Rails и parser regression suites зелёные; блокер перед push/deploy снят.
+
+### Риски и замечания
+
+- Рабочее дерево содержит большой накопленный diff предыдущих расчетных/parser задач. Он проверен полной Rails suite и parser suite, но staging перед commit требует финального просмотра `git diff --stat` и отсутствия секретов.
+- Production provisioning Шатуры и проверка изоляции с Люберцами еще не выполнялись в этой записи; они будут зафиксированы отдельной записью после деплоя.

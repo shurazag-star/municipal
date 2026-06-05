@@ -182,3 +182,81 @@ def test_excel_parser_supports_relative_budget_roster_plan_years(tmp_path):
     assert group.funding[(2026, BudgetSource.LOCAL_BUDGET)] == Decimal("17160000.00")
     assert group.funding[(2027, BudgetSource.LOCAL_BUDGET)] == Decimal("65780000.00")
     assert group.funding[(2028, BudgetSource.REGIONAL_BUDGET)] == Decimal("500000.00")
+
+
+def test_excel_parser_supports_plain_year_headers_and_activity_totals(tmp_path):
+    path = tmp_path / "activity_budget_roster.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Результат"
+    ws.merge_cells("B8:M8")
+    ws.merge_cells("N8:O8")
+    ws.merge_cells("P8:Q8")
+    ws.merge_cells("R8:S8")
+    ws["B8"] = "Наименование"
+    ws["N8"] = "ЦСР"
+    ws["P8"] = "Тип средств"
+    ws["R8"] = "Мероприятие"
+    ws["T8"] = "КОСГУ"
+    ws["U8"] = "СубКОСГУ"
+    ws["V8"] = "2026 год"
+    ws["Y8"] = "2027 год"
+    ws["AA8"] = "2028 год"
+    ws["B9"] = 1
+    ws["N9"] = 2
+    ws["P9"] = 3
+    ws["R9"] = 4
+    ws["T9"] = 5
+    ws["U9"] = 6
+    ws["V9"] = 7
+    ws["Y9"] = 8
+    ws["AA9"] = 9
+
+    ws["C10"] = 'Муниципальная программа "Развитие институтов гражданского общества"'
+    ws["N10"] = "1300000000"
+    ws["V10"] = 184730729.5
+    ws["Y10"] = 126648829.5
+    ws["AA10"] = 126681369.5
+
+    ws["F20"] = "Информирование населения в печатных СМИ"
+    ws["N20"] = "1310100821"
+    ws["P20"] = "900100"
+    ws["R20"] = "131010500000000"
+    ws["V20"] = 2_000_000
+    ws["Y20"] = 2_000_000
+    ws["AA20"] = 2_000_000
+
+    ws["F21"] = "Прочие работы, услуги"
+    ws["N21"] = "1310100821"
+    ws["P21"] = "900100"
+    ws["R21"] = "131010500000000"
+    ws["T21"] = "226"
+    ws["V21"] = 2_000_000
+    ws["Y21"] = 2_000_000
+    ws["AA21"] = 2_000_000
+
+    ws["F22"] = "Информирование населения в печатных СМИ"
+    ws["N22"] = "1310100821"
+    ws["P22"] = "900302"
+    ws["R22"] = "131010500000000"
+    ws["V22"] = 300_000
+    ws["Y22"] = 400_000
+    ws["AA22"] = 500_000
+    wb.save(path)
+
+    parsed = parse_xlsx_finance_report(path)
+
+    assert parsed.program_totals[2026] == Decimal("184730729.50")
+    assert parsed.program_totals[2028] == Decimal("126681369.50")
+    assert parsed.target_years == [2026, 2027, 2028]
+    activity_rows = [row for row in parsed.rows if row.row_type == ExcelRowType.ACTIVITY_AGGREGATE_ROW]
+    assert len(activity_rows) == 3
+    assert len(parsed.object_groups) == 1
+    group = parsed.object_groups[0]
+    assert group.status == "ACTIVITY_AGGREGATE"
+    assert group.object_code == "131010500000000"
+    assert group.object_name == "Информирование населения в печатных СМИ"
+    assert group.funding[(2026, BudgetSource.LOCAL_BUDGET)] == Decimal("2000000.00")
+    assert group.funding[(2027, BudgetSource.LOCAL_BUDGET)] == Decimal("2000000.00")
+    assert group.funding[(2028, BudgetSource.REGIONAL_BUDGET)] == Decimal("500000.00")
+    assert group.total_by_year()[2026] == Decimal("2300000.00")

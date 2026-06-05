@@ -174,6 +174,187 @@ class ChangeSetApplicationServiceTest < ActiveSupport::TestCase
     assert_equal 0, @change_set.export_summary["manual_insert_required_count"]
   end
 
+  test "mirrors duplicate finance source rows without double counting them in rollups" do
+    @change_set.change_items.destroy_all
+    program_root = @version.program_nodes.create!(
+      node_type: "program",
+      name: "Программа",
+      normalized_name: "программа"
+    )
+    main_source_row = @version.program_nodes.create!(
+      parent: program_root,
+      node_type: "object",
+      name: "Основное мероприятие 01",
+      normalized_name: "основное мероприятие 01",
+      display_number: "1",
+      source_table_index: 5,
+      source_row_index: 3,
+      metadata: { "source" => "finance_source_row" }
+    )
+    main_source_row.funding_lines.create!(
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "100000.00",
+      metadata: {
+        "source_table_index" => 5,
+        "source_row_index" => 5,
+        "source_cell_index" => 5,
+        "total_cell_index" => 4,
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    main_total_row = @version.program_nodes.create!(
+      parent: program_root,
+      node_type: "main_activity",
+      name: "Основное мероприятие 01",
+      normalized_name: "основное мероприятие 01",
+      display_number: "1",
+      source_table_index: 5,
+      source_row_index: 6,
+      metadata: {
+        "source" => "finance_table",
+        "docx_year_cell_indexes" => { "2026" => 5 },
+        "docx_total_cell_index" => 4,
+        "docx_unit_in_document" => "thousand_rub"
+      }
+    )
+    leaf = @version.program_nodes.create!(
+      parent: main_total_row,
+      node_type: "object",
+      name: "Мероприятие 01.01",
+      normalized_name: "мероприятие 01 01",
+      display_number: "1.1",
+      source_table_index: 5,
+      source_row_index: 7,
+      metadata: { "source" => "finance_source_row" }
+    )
+    leaf.funding_lines.create!(
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "100000.00",
+      metadata: {
+        "source_table_index" => 5,
+        "source_row_index" => 8,
+        "source_cell_index" => 5,
+        "total_cell_index" => 4,
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    @version.program_nodes.create!(
+      parent: main_total_row,
+      node_type: "activity",
+      name: "Мероприятие 01.01",
+      normalized_name: "мероприятие 01 01",
+      display_number: "1.1",
+      source_table_index: 5,
+      source_row_index: 10,
+      metadata: {
+        "source" => "finance_table",
+        "docx_year_cell_indexes" => { "2026" => 5 },
+        "docx_total_cell_index" => 4,
+        "docx_unit_in_document" => "thousand_rub"
+      }
+    )
+    @version.program_nodes.create!(
+      parent: program_root,
+      node_type: "object",
+      name: "Итого по подпрограмме",
+      normalized_name: "итого по подпрограмме",
+      display_number: "Итого по подпрограмме",
+      source_table_index: 5,
+      source_row_index: 14,
+      metadata: {
+        "source" => "finance_table",
+        "docx_summary_row" => true,
+        "docx_year_cell_indexes" => { "2026" => 5 },
+        "docx_total_cell_index" => 4,
+        "docx_unit_in_document" => "thousand_rub"
+      }
+    )
+    @change_set.change_items.create!(
+      program_node: leaf,
+      change_type: "amount_update",
+      status: "confirmed",
+      field_name: "amount_rub",
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      old_amount_rub: "100000.00",
+      new_amount_rub: "200000.00",
+      delta_rub: "100000.00",
+      source_reference: { "row_number" => 12 },
+      confidence: "0.95",
+      user_confirmed: true
+    )
+    patch_client = CapturingPatchClient.new
+
+    result = ChangeSetApplicationService.new(change_set: @change_set, user: @user, patch_client: patch_client).apply!
+
+    target_version = result.target_program_version
+    target_root = target_version.program_nodes.find_by!(name: "Программа")
+    target_main_source = target_version.program_nodes.find_by!(name: "Основное мероприятие 01", node_type: "object")
+    target_main_total = target_version.program_nodes.find_by!(name: "Основное мероприятие 01", node_type: "main_activity")
+    target_activity_total = target_version.program_nodes.find_by!(name: "Мероприятие 01.01", node_type: "activity")
+    target_subprogram_total = target_version.program_nodes.find_by!(name: "Итого по подпрограмме")
+
+    assert_equal BigDecimal("200000.00"), target_root.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
+    assert_equal BigDecimal("200000.00"), target_main_source.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
+    assert_equal BigDecimal("200000.00"), target_main_total.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
+    assert_equal BigDecimal("200000.00"), target_activity_total.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
+    assert_equal BigDecimal("200000.00"), target_subprogram_total.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
+
+    updates = patch_client.changes.fetch("cell_updates")
+    assert updates.any? { |update| update["row_index"] == 5 && BigDecimal(update["amount_rub"]) == BigDecimal("200000.00") }
+    assert updates.any? { |update| update["row_index"] == 6 && update["reason"] == "node_total_year" && BigDecimal(update["amount_rub"]) == BigDecimal("200000.00") }
+    assert updates.any? { |update| update["row_index"] == 10 && update["reason"] == "node_total_year" && BigDecimal(update["amount_rub"]) == BigDecimal("200000.00") }
+    assert updates.any? { |update| update["row_index"] == 14 && update["reason"] == "node_total_year" && BigDecimal(update["amount_rub"]) == BigDecimal("200000.00") }
+  end
+
+  test "infers missing target year metadata from adjacent funding years" do
+    @object.funding_lines.create!(
+      year: 2027,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "0.00",
+      source_document: @source_document,
+      raw_source_name: "LOCAL_BUDGET",
+      metadata: {
+        "source_table_index" => 0,
+        "source_row_index" => 1,
+        "source_cell_index" => 5,
+        "raw_value" => "0,00",
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    @change_set.change_items.create!(
+      program_node: @object,
+      change_type: "amount_update",
+      status: "confirmed",
+      field_name: "amount_rub",
+      year: 2028,
+      source_type: "LOCAL_BUDGET",
+      old_amount_rub: "0.00",
+      new_amount_rub: "300000.00",
+      delta_rub: "300000.00",
+      source_reference: { "row_number" => 11 },
+      confidence: "0.95",
+      user_confirmed: true
+    )
+    patch_client = CapturingPatchClient.new
+
+    result = ChangeSetApplicationService.new(change_set: @change_set, user: @user, patch_client: patch_client).apply!
+
+    target_object = result.target_program_version.program_nodes.find_by!(name: "Объект тестовый")
+    target_line = target_object.funding_lines.find_by!(year: 2028, source_type: "LOCAL_BUDGET")
+    inferred_update = patch_client.changes["cell_updates"].find do |update|
+      update["reason"] == "funding_line_year" &&
+        update["program_node_id"] == target_object.id &&
+        update["row_index"] == 1 &&
+        update["cell_index"] == 6
+    end
+
+    assert_equal 6, target_line.metadata["source_cell_index"]
+    assert_equal BigDecimal("300000.00"), BigDecimal(inferred_update.fetch("amount_rub"))
+  end
+
   test "does not require post export pdf validation before pdf patch export exists" do
     pdf_document = SourceDocument.create!(
       organization: @organization,
@@ -1036,6 +1217,153 @@ class ChangeSetApplicationServiceTest < ActiveSupport::TestCase
     target_parent = result.target_program_version.program_nodes.find_by!(name: main_activity_like_parent.name)
     target_node = result.target_program_version.program_nodes.find_by!(name: "Новый ВЗУ")
     assert_equal target_parent, target_node.parent
+    assert_equal 0, result.manual_insert_required_count
+  end
+
+  test "uses shifted main activity parent for activity aggregate new rows" do
+    program_root = @version.program_nodes.create!(
+      node_type: "program",
+      name: "Муниципальная программа",
+      normalized_name: "муниципальная программа"
+    )
+    main_activity_like_parent = @version.program_nodes.create!(
+      parent: program_root,
+      node_type: "object",
+      code: "01",
+      display_number: "1",
+      name: "Основное мероприятие 01. Создание условий для реализации полномочий органов местного самоуправления",
+      normalized_name: "основное мероприятие 01 создание условий для реализации полномочий органов местного самоуправления",
+      source_table_index: 0,
+      source_row_index: 2,
+      execution_period: "01.01.2026-31.12.2030",
+      metadata: @parent.metadata.merge("finance_table_index" => 5)
+    )
+    %w[FEDERAL_BUDGET REGIONAL_BUDGET LOCAL_BUDGET].each do |source_type|
+      main_activity_like_parent.funding_lines.create!(
+        year: 2026,
+        source_type: source_type,
+        amount_rub: "0.00",
+        metadata: { "source_table_index" => 0, "source_row_index" => 2, "source_cell_index" => 4 }
+      )
+    end
+    main_activity_total_parent = @version.program_nodes.create!(
+      parent: program_root,
+      node_type: "main_activity",
+      code: "01",
+      display_number: "1",
+      name: main_activity_like_parent.name,
+      normalized_name: main_activity_like_parent.normalized_name,
+      source_table_index: 0,
+      source_row_index: 3,
+      execution_period: "01.01.2026-31.12.2030",
+      metadata: @parent.metadata.merge("finance_table_index" => 5, "source" => "finance_table")
+    )
+    previous_activity = @version.program_nodes.create!(
+      parent: main_activity_total_parent,
+      node_type: "object",
+      code: "01.01",
+      display_number: "1.1",
+      name: "Мероприятие 01.01. Расходы на обеспечение деятельности",
+      normalized_name: "мероприятие 01 01 расходы на обеспечение деятельности",
+      source_table_index: 0,
+      source_row_index: 4,
+      execution_period: "01.01.2026-31.12.2030"
+    )
+    previous_activity.funding_lines.create!(
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "1000.00",
+      metadata: { "source_table_index" => 0, "source_row_index" => 5, "source_cell_index" => 4 }
+    )
+    previous_total_row = @version.program_nodes.create!(
+      parent: main_activity_total_parent,
+      node_type: "activity",
+      code: "01.01",
+      display_number: "1.1",
+      name: "Мероприятие 01.01. Расходы на обеспечение деятельности",
+      normalized_name: "мероприятие 01 01 расходы на обеспечение деятельности",
+      source_table_index: 0,
+      source_row_index: 6,
+      execution_period: "01.01.2026-31.12.2030",
+      metadata: { "source" => "finance_table", "docx_source_raw_value" => "Итого:" }
+    )
+    following_activity = @version.program_nodes.create!(
+      parent: main_activity_total_parent,
+      node_type: "object",
+      code: "01.03",
+      display_number: "1.2",
+      name: "Мероприятие 01.03. Расходы на обеспечение молодежной политики",
+      normalized_name: "мероприятие 01 03 расходы на обеспечение молодежной политики",
+      source_table_index: 0,
+      source_row_index: 8,
+      execution_period: "01.01.2026-31.12.2030"
+    )
+    following_total_row = @version.program_nodes.create!(
+      parent: main_activity_total_parent,
+      node_type: "activity",
+      code: "01.03",
+      display_number: "1.2",
+      name: "Мероприятие 01.03. Расходы на обеспечение молодежной политики",
+      normalized_name: "мероприятие 01 03 расходы на обеспечение молодежной политики",
+      source_table_index: 0,
+      source_row_index: 9,
+      execution_period: "01.01.2026-31.12.2030",
+      metadata: { "source" => "finance_table", "docx_source_raw_value" => "Итого:" }
+    )
+    @change_set.change_items.create!(
+      change_type: "new_object",
+      status: "confirmed",
+      field_name: "object",
+      year: 2026,
+      source_type: "LOCAL_BUDGET",
+      new_value: "Обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+      new_amount_rub: "5574845.99",
+      delta_rub: "5574845.99",
+      source_reference: {
+        "document_type" => "xlsx_finance",
+        "group_status" => "ACTIVITY_AGGREGATE",
+        "match_status" => "MISSING_IN_DOCX",
+        "group_key" => "136010200000000::136010200000000::обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+        "parent_activity_code" => "136010200000000",
+        "object_code" => "136010200000000",
+        "object_name" => "Обеспечение деятельности муниципальных органов - комитет по молодежной политике",
+        "row_number" => 67
+      },
+      confidence: "0.0"
+    )
+    patch_client = CapturingPatchClient.new
+
+    result = ChangeSetApplicationService.new(change_set: @change_set, user: @user, patch_client: patch_client).apply!
+
+    target_root = result.target_program_version.program_nodes.find_by!(name: program_root.name)
+    target_anchor = result.target_program_version.program_nodes.find_by!(name: main_activity_like_parent.name, node_type: "object")
+    target_main_activity = result.target_program_version.program_nodes.find_by!(name: main_activity_total_parent.name, node_type: "main_activity")
+    target_node = result.target_program_version.program_nodes.find_by!("name LIKE ?", "%комитет по молодежной политике%")
+    target_following = result.target_program_version.program_nodes.find_by!(name: following_activity.name)
+    target_previous_total_row = result.target_program_version.program_nodes.find_by!(source_row_index: previous_total_row.source_row_index)
+    target_following_total_row = result.target_program_version.program_nodes.find_by!(source_row_index: following_total_row.source_row_index)
+    assert_equal target_main_activity, target_node.parent
+    assert_equal "1.1", result.target_program_version.program_nodes.find_by!(name: previous_activity.name, source_row_index: previous_activity.source_row_index).display_number
+    assert_equal "1.2", target_node.display_number
+    assert_equal "01.02", target_node.code
+    assert_equal "Мероприятие 01.02. Обеспечение деятельности муниципальных органов - комитет по молодежной политике", target_node.name
+    assert_equal "1.3", target_following.display_number
+    assert_equal "1.1", target_previous_total_row.display_number
+    assert_equal "1.3", target_following_total_row.display_number
+    insertion = patch_client.changes["insert_objects"].find { |item| item["target_node_id"] == target_node.id }
+    assert_equal 6, insertion["insert_after_row_index"]
+    assert_equal "1", insertion["parent_display_number"]
+    assert_equal "01.01.2026-31.12.2030", insertion["execution_period"]
+    assert_equal ["FEDERAL_BUDGET", "REGIONAL_BUDGET", "LOCAL_BUDGET", "TOTAL"], insertion["rows"].map { |row| row["source_type"] }
+    assert_equal "16724.55", BigDecimal(insertion["rows"].last["total_amount_rub"]).then { |amount| (amount / 1000).to_s("F") }
+    display_update = patch_client.changes["text_updates"].find { |update| update["program_node_id"] == target_following.id && update["reason"] == "display_number" }
+    assert_equal "1.3.", display_update["text"]
+    total_display_update = patch_client.changes["text_updates"].find { |update| update["program_node_id"] == target_following_total_row.id && update["reason"] == "display_number" }
+    assert_equal "1.3.", total_display_update["text"]
+    refute patch_client.changes["text_updates"].any? { |update| update["program_node_id"] == target_previous_total_row.id && update["reason"] == "display_number" }
+    assert_equal target_anchor.id, target_node.metadata["docx_anchor_parent_node_id"]
+    assert_equal BigDecimal("5574845.99"), target_node.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
+    assert_equal BigDecimal("5574845.99"), target_main_activity.funding_lines.find_by!(year: 2026, source_type: "LOCAL_BUDGET").amount_rub
     assert_equal 0, result.manual_insert_required_count
   end
 

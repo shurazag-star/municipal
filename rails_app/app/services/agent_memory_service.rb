@@ -18,7 +18,10 @@ class AgentMemoryService
       state["last_referenced_object"] = object
       state["last_object_query"] = object
     end
-    state["last_source_mode"] = arguments.to_h["source_mode"] if arguments.to_h["source_mode"].present?
+    if arguments.to_h["source_mode"].present?
+      state["last_source_mode"] = arguments.to_h["source_mode"]
+      state["last_source_mode_explicit"] = true
+    end
     @conversation.update!(working_state: state, memory_updated_at: Time.current)
   end
 
@@ -34,7 +37,7 @@ class AgentMemoryService
     state["last_referenced_object"] ||= details["object_name"]
     state["last_object_name"] = details["object_name"] if details["object_name"].present?
     state["last_program_node_id"] = details["program_node_id"] if details["program_node_id"].present?
-    state["last_source_mode"] = details["source_mode"] if details["source_mode"].present?
+    state["last_resolved_source_mode"] = details["source_mode"] if details["source_mode"].present?
     state = update_manual_clarification_state(state, tool_results)
     @conversation.update!(
       working_state: state.compact,

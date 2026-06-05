@@ -68,6 +68,43 @@ class ProgramTreePersisterTest < ActiveSupport::TestCase
     assert_equal 1, version.reload.program_nodes.count
   end
 
+  test "reimport reuses uploaded version instead of generated versions with same source document" do
+    uploaded_version = ProgramTreePersister.new(source_document: @document, user: @user).persist!
+    generated_version = uploaded_version.municipal_program.program_versions.create!(
+      created_by: @user,
+      version_number: 99,
+      status: "generated_rejected",
+      import_summary: { "source_document_id" => @document.id }
+    )
+    generated_node = generated_version.program_nodes.create!(
+      node_type: "program",
+      name: "Generated draft",
+      metadata: {}
+    )
+    @document.update!(
+      parsed_payload: parsed_payload.deep_merge(
+        "nodes" => [
+          {
+            "stable_key" => "program",
+            "node_type" => "program",
+            "name" => "Развитие инженерной инфраструктуры",
+            "normalized_name" => "развитие инженерной инфраструктуры",
+            "metadata" => {}
+          }
+        ],
+        "funding_lines" => []
+      )
+    )
+
+    persisted = ProgramTreePersister.new(source_document: @document, user: @user).persist!
+
+    assert_equal uploaded_version, persisted
+    assert_equal uploaded_version, uploaded_version.municipal_program.current_version
+    assert_equal 1, uploaded_version.reload.program_nodes.count
+    assert ProgramNode.exists?(generated_node.id)
+    assert_equal "generated_rejected", generated_version.reload.status
+  end
+
   test "each uploaded docx creates a separate imported version tied to source document" do
     first_version = ProgramTreePersister.new(source_document: @document, user: @user).persist!
     second_document = SourceDocument.create!(

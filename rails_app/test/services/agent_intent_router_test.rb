@@ -59,12 +59,15 @@ class AgentIntentRouterTest < ActiveSupport::TestCase
     mismatches = router.route(content: "где несовпадения?", context: workspace_context)
     recalculate = router.route(content: "пересчитай программу", context: workspace_context)
     excel_priority = router.route(content: "используй Excel как главный источник", context: workspace_context)
+    auto_priority = router.route(content: "поставь автоматический режим источников", context: workspace_context)
 
     assert_equal "validate_control_sums", mismatches.intent
     assert_equal "run_analysis", recalculate.intent
     assert_equal "choose_source_priority", excel_priority.intent
     assert_equal "xlsx_finance", excel_priority.arguments["source_priority"]
     assert_equal "xlsx_target", excel_priority.arguments["source_mode"]
+    assert_equal "choose_source_priority", auto_priority.intent
+    assert_equal "auto", auto_priority.arguments["source_mode"]
   end
 
   test "routes targeted object recheck and recalculation phrases" do
@@ -165,6 +168,47 @@ class AgentIntentRouterTest < ActiveSupport::TestCase
     assert_equal "run_analysis", decision.intent
     assert_equal "local_rules", decision.source
     assert_nil decision.arguments["object_query"]
+  end
+
+  test "routes full uploaded files workflow to document generation without fake object query" do
+    router = AgentIntentRouter.new(organization: @organization, user: @user, llm_client: nil)
+
+    decision = router.route(
+      content: "Проанализируй все загруженные файлы, сопоставь строки Excel с текущей редакцией, пересчитай суммы и сформируй новую редакцию Word-документа.",
+      context: workspace_context
+    )
+
+    assert_equal "generate_docx", decision.intent
+    assert_equal "local_rules", decision.source
+    assert_nil decision.arguments["object_query"]
+    assert_equal "xlsx_target", decision.arguments["source_mode"]
+  end
+
+  test "routes broad full document workflow through automatic default when source is not explicit" do
+    router = AgentIntentRouter.new(organization: @organization, user: @user, llm_client: nil)
+
+    decision = router.route(
+      content: "Проанализируй все загруженные файлы, пересчитай суммы и сформируй новую редакцию Word-документа.",
+      context: workspace_context
+    )
+
+    assert_equal "generate_docx", decision.intent
+    assert_nil decision.arguments["object_query"]
+    assert_nil decision.arguments["source_mode"]
+  end
+
+  test "routes full document workflow with automatic mode phrase to generation" do
+    router = AgentIntentRouter.new(organization: @organization, user: @user, llm_client: nil)
+
+    decision = router.route(
+      content: "Проанализируй все загруженные файлы, автоматически определи способ пересчета, сопоставь финансовую модель с текущей редакцией и сформируй новую редакцию Word-документа.",
+      context: workspace_context
+    )
+
+    assert_equal "generate_docx", decision.intent
+    assert_equal "local_rules", decision.source
+    assert_nil decision.arguments["object_query"]
+    assert_equal "auto", decision.arguments["source_mode"]
   end
 
   test "routes generic change request with loaded source to document generation" do

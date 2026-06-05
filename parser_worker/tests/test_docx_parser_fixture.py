@@ -150,34 +150,37 @@ def test_docx_parser_extracts_tree_nodes_and_funding_lines_with_coordinates(tmp_
     result_cells[6].text = "По данным ОМСУ"
 
     finance_table = document.add_table(rows=3, cols=8)
-    for idx, label in enumerate(["№ п/п", "Мероприятие подпрограммы", "Срок исполнения мероприятия", "Источники финансирования", "Всего", "2026 год", "2027 год", "Ответственный"]):
+    for idx, label in enumerate(["№ п/п", "Мероприятие подпрограммы", "Срок исполнения мероприятия", "Источники финансирования", "Всего", "2026 год", "2027 год", "2028год"]):
         finance_table.rows[0].cells[idx].text = label
         finance_table.rows[1].cells[idx].text = label
     finance_table.rows[2].cells[0].text = "1"
     finance_table.rows[2].cells[1].text = "Основное мероприятие 02 - Строительство объектов водоснабжения"
     finance_table.rows[2].cells[2].text = "2026-2027"
-    finance_table.rows[2].cells[3].text = "Итого"
+    finance_table.rows[2].cells[3].text = "Итого:"
     finance_table.rows[2].cells[4].text = "90 555,38"
     finance_table.rows[2].cells[5].text = "90 555,38"
     finance_table.rows[2].cells[6].text = "0,00"
+    finance_table.rows[2].cells[7].text = "0,00"
 
     activity = finance_table.add_row().cells
     activity[0].text = "1.1"
     activity[1].text = "Мероприятие 02.01 - Строительство водозаборных узлов"
     activity[2].text = "2026-2027"
-    activity[3].text = "Итого"
+    activity[3].text = "Итого:"
     activity[4].text = "90 555,38"
     activity[5].text = "90 555,38"
     activity[6].text = "0,00"
+    activity[7].text = "0,00"
 
     object_total = finance_table.add_row().cells
     object_total[0].text = "1.1.1"
     object_total[1].text = "ВЗУ Черусти"
     object_total[2].text = "2026"
-    object_total[3].text = "Итого"
+    object_total[3].text = "Итого:"
     object_total[4].text = "90 555,38"
     object_total[5].text = "90 555,38"
     object_total[6].text = "0,00"
+    object_total[7].text = "0,00"
 
     oblast = finance_table.add_row().cells
     oblast[0].text = "1.1.1"
@@ -185,6 +188,7 @@ def test_docx_parser_extracts_tree_nodes_and_funding_lines_with_coordinates(tmp_
     oblast[2].text = "2026"
     oblast[3].text = "Средства бюджета Московской области"
     oblast[5].text = "78 330,39"
+    oblast[7].text = "1,00"
 
     local = finance_table.add_row().cells
     local[0].text = "1.1.1"
@@ -192,18 +196,20 @@ def test_docx_parser_extracts_tree_nodes_and_funding_lines_with_coordinates(tmp_
     local[2].text = "2026"
     local[3].text = "Средства бюджета муниципального округа"
     local[5].text = "12 224,99"
+    local[7].text = "2,00"
 
     subprogram_total = finance_table.add_row().cells
     subprogram_total[0].text = "Итого по подпрограмме"
     subprogram_total[1].text = "Итого по подпрограмме"
-    subprogram_total[3].text = "Итого"
+    subprogram_total[3].text = "Итого:"
     subprogram_total[4].text = "90 555,38"
     subprogram_total[5].text = "90 555,38"
     subprogram_total[6].text = "0,00"
+    subprogram_total[7].text = "0,00"
 
     blank_number_activity = finance_table.add_row().cells
     blank_number_activity[1].text = "Мероприятие 02.02 - Ремонт станции водоподготовки"
-    blank_number_activity[3].text = "Итого"
+    blank_number_activity[3].text = "Итого:"
     blank_number_activity[4].text = "15 000,00"
     blank_number_activity[5].text = "15 000,00"
     blank_number_activity[6].text = "0,00"
@@ -227,7 +233,7 @@ def test_docx_parser_extracts_tree_nodes_and_funding_lines_with_coordinates(tmp_
     assert object_node.metadata["docx_row_type"] == "object"
     assert object_node.metadata["docx_source_cell_index"] == 3
     assert object_node.metadata["docx_total_cell_index"] == 4
-    assert object_node.metadata["docx_year_cell_indexes"] == {"2026": 5, "2027": 6}
+    assert object_node.metadata["docx_year_cell_indexes"] == {"2026": 5, "2027": 6, "2028": 7}
     summary_node = next(node for node in parsed.nodes if node.name == "Итого по подпрограмме")
     assert summary_node.metadata["docx_summary_row"] is True
     assert summary_node.parent_stable_key == "subprogram:1"
@@ -237,7 +243,7 @@ def test_docx_parser_extracts_tree_nodes_and_funding_lines_with_coordinates(tmp_
     assert blank_number_node.parent_stable_key
 
     funding = [line for line in parsed.funding_lines if line.node_stable_key == object_node.stable_key]
-    assert len(funding) == 2
+    assert len(funding) == 4
     oblast_line = next(line for line in funding if line.source_type == BudgetSource.MOSCOW_OBLAST_BUDGET)
     assert oblast_line.amount_rub == Decimal("78330390.00")
     assert oblast_line.unit_in_document == "thousand_rub"
@@ -245,13 +251,23 @@ def test_docx_parser_extracts_tree_nodes_and_funding_lines_with_coordinates(tmp_
     assert oblast_line.source_row_index == 5
     assert oblast_line.source_cell_index == 5
     assert oblast_line.total_cell_index == 4
-    assert oblast_line.year_cell_indexes == {"2026": 5, "2027": 6}
+    assert oblast_line.year_cell_indexes == {"2026": 5, "2027": 6, "2028": 7}
     assert oblast_line.raw_value == "78 330,39"
     assert oblast_line.source_label == "Средства бюджета Московской области"
+    local_2028 = next(line for line in funding if line.year == 2028 and line.source_type == BudgetSource.LOCAL_BUDGET)
+    assert local_2028.amount_rub == Decimal("2000.00")
+    assert local_2028.source_cell_index == 7
+    blank_number_source_node = next(
+        node
+        for node in parsed.nodes
+        if node.code == "02.02" and node.node_type == "object"
+    )
+    assert blank_number_source_node.parent_stable_key
+    assert blank_number_source_node.parent_stable_key != blank_number_node.stable_key
     blank_number_funding = [
         line
         for line in parsed.funding_lines
-        if line.node_stable_key == blank_number_node.stable_key
+        if line.node_stable_key == blank_number_source_node.stable_key
     ]
     assert len(blank_number_funding) == 1
     assert blank_number_funding[0].source_type == BudgetSource.LOCAL_BUDGET
@@ -320,7 +336,7 @@ def test_docx_parser_extracts_shifted_summary_source_rows(tmp_path):
     summary_total = finance_table.add_row().cells
     for idx in range(4):
         summary_total[idx].text = "Итого по подпрограмме"
-    summary_total[4].text = "Итого"
+    summary_total[4].text = "Итого:"
     summary_total[5].text = "759 864,58"
     summary_total[6].text = "68 810,11"
     summary_total[15].text = "261 756,23"

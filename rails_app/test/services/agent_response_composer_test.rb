@@ -251,6 +251,23 @@ class AgentResponseComposerTest < ActiveSupport::TestCase
     assert_no_match(/выпускать нельзя|нельзя выпускать|не применяю/i, content)
   end
 
+  test "analysis clarification response surfaces version choice question" do
+    response = AgentResponseComposer.new(
+      organization: @organization,
+      user: @user,
+      intent: "run_analysis",
+      tool_result: {
+        "status" => "needs_clarification",
+        "clarification_question" => "У нас есть активная версия и проверенный черновик. В какую версию внести изменения: в активную или в черновик?"
+      }
+    ).compose
+
+    content = response.fetch("content")
+    assert_match(/активная версия/i, content)
+    assert_match(/черновик/i, content)
+    assert_no_match(/Документы вижу/i, content)
+  end
+
   test "manual transfer response lists both recalculation operations" do
     response = AgentResponseComposer.new(
       organization: @organization,
@@ -333,5 +350,26 @@ class AgentResponseComposerTest < ActiveSupport::TestCase
     ).compose
 
     assert_no_match(/Напишите: «проанализируй документы»/, response.fetch("content"))
+  end
+
+  test "analysis zero-result response diagnoses unparsed Excel structure" do
+    response = AgentResponseComposer.new(
+      organization: @organization,
+      user: @user,
+      intent: "run_analysis",
+      tool_result: {
+        "status" => "completed",
+        "change_project_id" => nil,
+        "diagnostics" => {
+          "source_document_type" => "xlsx_finance",
+          "object_groups_count" => 0,
+          "program_totals_count" => 0
+        }
+      }
+    ).compose
+
+    content = response.fetch("content")
+    assert_match(/ошибка разбора структуры Excel/i, content)
+    assert_no_match(/Изменений по суммам не нашел/i, content)
   end
 end

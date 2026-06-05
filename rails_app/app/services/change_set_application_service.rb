@@ -246,13 +246,15 @@ class ChangeSetApplicationService
     }
 
     new_object_items.group_by { |item| source_group_key(item) }.each do |group_key, items|
-      parent = resolve_parent_node(target_version, items.first)
-      unless parent
+      anchor_parent = resolve_parent_node(target_version, items.first)
+      unless anchor_parent
         result["manual_item_ids"].concat(items.map(&:id))
         next
       end
 
-      node = create_new_object_node!(target_version, parent, group_key, items)
+      node_parent = new_object_tree_parent(anchor_parent, items)
+      node = create_new_object_node!(target_version, node_parent, group_key, items, anchor_parent: anchor_parent)
+      renumber_activity_aggregate_siblings!(target_version, anchor_parent, node) if activity_aggregate_items?(items)
       create_new_object_funding_lines!(node, items)
       items.each { |item| result["target_node_ids_by_item_id"][item.id.to_s] = node.id }
       result["created_groups"] << {
@@ -265,28 +267,34 @@ class ChangeSetApplicationService
     result
   end
 
-  def create_new_object_node!(target_version, parent, group_key, items)
+  def create_new_object_node!(target_version, parent, group_key, items, anchor_parent: parent)
     reference = items.first.source_reference || {}
     virtual_residual = virtual_residual_group?(items)
     name = new_object_name(items)
-    display_number = next_child_display_number(parent)
+    display_number = new_object_display_number(parent, items)
+    code = new_object_code(items)
     target_version.program_nodes.create!(
       parent: parent,
       node_type: residual_group?(items) ? "residual" : "object",
-      code: reference["object_code"].presence,
+      code: code,
       external_code: reference["object_code"].presence,
       display_number: display_number,
       name: name,
       normalized_name: normalize_name(name),
-      execution_period: execution_period_for_items(items),
-      source_table_index: parent.source_table_index,
+      responsible: reference["responsible"].presence,
+      execution_period: reference["execution_period"].presence || execution_period_for_items(items, anchor_parent: anchor_parent),
+      source_table_index: anchor_parent.source_table_index,
       source_row_index: nil,
       metadata: {
         "source_change_set_id" => @change_set.id,
         "source_change_item_ids" => items.map(&:id),
         "source_group_key" => group_key,
+        "group_status" => reference["group_status"],
+        "activity_code" => code,
         "parent_activity_code" => reference["parent_activity_code"],
         "object_code" => reference["object_code"],
+        "docx_anchor_parent_node_id" => (anchor_parent.id if anchor_parent != parent),
+        "responsible" => reference["responsible"],
         "docx_insert_status" => virtual_residual ? "virtual" : "pending",
         "docx_virtual_residual" => (true if virtual_residual)
       }.compact
@@ -329,14 +337,22 @@ class ChangeSetApplicationService
     source_line = item.program_node.funding_lines.detect do |line|
       line.year == item.year && funding_source_value(line.source_type) == funding_source_value(item.source_type)
     end
+    reference = source_line || reference_funding_line_for(target_node, item.source_type) || reference_funding_line_for(item.program_node, item.source_type)
     target_node.funding_lines.build(
       year: item.year,
       source_type: funding_source_key(item.source_type),
       amount_kind: "planned",
-      source_document: source_line&.source_document,
-      source_row_ref: source_line&.source_row_ref,
-      raw_source_name: item.source_type,
-      metadata: source_line&.metadata || {}
+      source_document: source_line&.source_document || reference&.source_document,
+      source_row_ref: source_line&.source_row_ref || reference&.source_row_ref,
+      raw_source_name: source_line&.raw_source_name || item.source_type,
+      metadata: funding_line_metadata_for(
+        target_node,
+        item.year,
+        item.source_type,
+        source_line: source_line,
+        reference_line: reference,
+        candidate_lines: target_node.funding_lines.to_a
+      )
     )
   end
 
@@ -345,8 +361,67 @@ class ChangeSetApplicationService
       recalculate_partial_tree!(target_version, applied_items, new_object_result)
     else
       recalculate_tree!(target_version)
+      reconcile_activity_aggregate_parent_totals!(target_version, new_object_result)
+      reconcile_program_root_to_passport_baseline!(
+        target_version,
+        root_delta_map_for(applied_items, new_object_result)
+      ) if manual_instruction_source_mode?
     end
     reconcile_to_external_target!(target_version) if xlsx_target_source_mode?
+  end
+
+  def reconcile_activity_aggregate_parent_totals!(target_version, new_object_result)
+    aggregate_nodes = Array(new_object_result["created_groups"]).filter_map do |group|
+      node = target_version.program_nodes.includes(:funding_lines, :parent).find_by(id: group["target_node_id"])
+      node if activity_aggregate_node?(node) && node.parent.present?
+    end
+    return if aggregate_nodes.empty?
+
+    deltas_by_node_id = Hash.new { |hash, key| hash[key] = Hash.new(BigDecimal("0")) }
+    aggregate_nodes.group_by(&:parent).each do |parent, nodes|
+      next unless source_parent_funding_blank?(parent)
+
+      previous_totals = aggregate_lines(parent.funding_lines)
+      aggregate_totals = merge_totals(nodes.map { |node| aggregate_lines(node.funding_lines) })
+      next if aggregate_totals.blank?
+
+      replace_node_funding_with_totals!(parent, aggregate_totals)
+      funding_total_delta(previous_totals, aggregate_totals).each do |key, delta|
+        deltas_by_node_id[parent.id][key] += delta
+      end
+      add_partial_delta_to_ancestors!(deltas_by_node_id, parent.parent, funding_total_delta(previous_totals, aggregate_totals))
+    end
+    apply_partial_deltas!(target_version, deltas_by_node_id.except(*aggregate_nodes.map(&:parent_id).compact))
+    update_partial_summary_rows!(target_version, deltas_by_node_id)
+  end
+
+  def source_parent_funding_blank?(target_parent)
+    source_parent_id = target_parent.metadata&.dig("source_program_node_id")
+    source_parent = ProgramNode.includes(:funding_lines).find_by(id: source_parent_id) if source_parent_id.present?
+    return true unless source_parent
+
+    source_parent.funding_lines.all? { |line| BigDecimal(line.amount_rub.to_s).zero? }
+  end
+
+  def funding_total_delta(previous_totals, target_totals)
+    keys = previous_totals.keys | target_totals.keys
+    keys.each_with_object({}) do |key, deltas|
+      delta = BigDecimal(target_totals.fetch(key, 0).to_s) - BigDecimal(previous_totals.fetch(key, 0).to_s)
+      deltas[key] = delta unless delta.zero?
+    end
+  end
+
+  def root_delta_map_for(applied_items, new_object_result)
+    deltas_by_node_id = Hash.new { |hash, key| hash[key] = Hash.new(BigDecimal("0")) }
+
+    applied_items.each do |item|
+      target_node = @node_map[item.program_node_id]
+      next unless target_node
+
+      add_partial_delta_to_ancestors!(deltas_by_node_id, target_node.parent, partial_amount_delta_for(item))
+    end
+
+    deltas_by_node_id
   end
 
   def recalculate_partial_tree!(target_version, applied_items, new_object_result)
@@ -440,7 +515,14 @@ class ChangeSetApplicationService
           source_document: reference&.source_document,
           source_row_ref: reference&.source_row_ref,
           raw_source_name: reference&.raw_source_name || source_type,
-          metadata: reference&.metadata || {}
+          metadata: funding_line_metadata_for(
+            node,
+            year,
+            source_type,
+            source_line: nil,
+            reference_line: reference,
+            candidate_lines: node.funding_lines.to_a
+          )
         )
       end
     end
@@ -484,20 +566,74 @@ class ChangeSetApplicationService
   end
 
   def reference_funding_line_for(node, source_type)
-    node.funding_lines.detect { |line| funding_source_value(line.source_type) == source_type } || node.funding_lines.first
+    normalized_source = funding_source_value(source_type)
+    node.funding_lines.detect { |line| funding_source_value(line.source_type) == normalized_source } || node.funding_lines.first
+  end
+
+  def funding_line_metadata_for(node, year, source_type, source_line: nil, reference_line: nil, candidate_lines: nil)
+    source_metadata = (source_line&.metadata || {}).to_h
+    reference_metadata = (reference_line&.metadata || {}).to_h
+    metadata = reference_metadata.except("source_cell_index", "raw_value").merge(source_metadata)
+    return metadata if metadata["source_row_index"].blank? && reference_metadata["source_row_index"].blank?
+
+    metadata["source_table_index"] ||= reference_metadata["source_table_index"]
+    metadata["source_row_index"] ||= reference_metadata["source_row_index"]
+    metadata["unit_in_document"] ||= reference_metadata["unit_in_document"]
+    metadata["total_cell_index"] ||= reference_metadata["total_cell_index"]
+    metadata["total_raw_value"] ||= reference_metadata["total_raw_value"]
+
+    metadata["source_cell_index"] ||= inferred_source_cell_index(
+      year,
+      source_type,
+      candidate_lines || node.funding_lines.to_a,
+      metadata,
+      source_metadata,
+      reference_metadata
+    )
+    metadata.compact
+  end
+
+  def inferred_source_cell_index(year, source_type, candidate_lines, *metadata_hashes)
+    year_key = year.to_i.to_s
+    metadata_hashes.each do |metadata|
+      year_indexes = metadata["year_cell_indexes"].presence || metadata["docx_year_cell_indexes"].presence
+      cell_index = year_indexes&.dig(year_key)
+      return cell_index.to_i if cell_index.present?
+    end
+
+    normalized_source = funding_source_value(source_type)
+    row_index = metadata_hashes.filter_map { |metadata| metadata["source_row_index"] }.first
+    mapped = Array(candidate_lines).each_with_object({}) do |line, result|
+      next unless funding_source_value(line.source_type) == normalized_source
+      next if row_index.present? && line.metadata&.dig("source_row_index").to_s != row_index.to_s
+
+      cell_index = line.metadata&.dig("source_cell_index")
+      next if cell_index.blank?
+
+      result[line.year.to_i] ||= cell_index.to_i
+    end
+    return mapped[year.to_i] if mapped.key?(year.to_i)
+    return nil if mapped.empty?
+
+    base_year, base_cell = mapped.min_by { |mapped_year, _cell| mapped_year }
+    candidate = base_cell + (year.to_i - base_year)
+    candidate.positive? ? candidate : nil
   end
 
   def recalculate_tree!(target_version)
     nodes = target_version.program_nodes.includes(:funding_lines, :children).to_a
     by_id = nodes.index_by(&:id)
     children_by_parent = nodes.group_by(&:parent_id)
+    duplicate_authority_by_mirror_id = duplicate_finance_row_authority_map(nodes, children_by_parent)
     roots = nodes.select { |node| node.parent_id.blank? || !by_id.key?(node.parent_id) }
     totals_by_node_id = {}
 
     visit = lambda do |node|
       return {} if FinancialNodeClassifier.summary_row?(node)
 
-      regular_children = children_by_parent.fetch(node.id, []).reject { |child| FinancialNodeClassifier.summary_row?(child) }
+      regular_children = children_by_parent.fetch(node.id, []).reject do |child|
+        FinancialNodeClassifier.summary_row?(child) || duplicate_authority_by_mirror_id.key?(child.id)
+      end
       child_totals = regular_children.map { |child| visit.call(child) }
       if child_totals.empty?
         totals = aggregate_lines(node.funding_lines)
@@ -512,17 +648,109 @@ class ChangeSetApplicationService
     end
 
     roots.each { |node| visit.call(node) }
-    update_summary_rows!(nodes, totals_by_node_id)
+    update_summary_rows!(nodes, totals_by_node_id, duplicate_authority_by_mirror_id)
+    sync_duplicate_finance_rows!(nodes, duplicate_authority_by_mirror_id, totals_by_node_id)
   end
 
-  def update_summary_rows!(nodes, totals_by_node_id)
+  def update_summary_rows!(nodes, totals_by_node_id, duplicate_authority_by_mirror_id = {})
     nodes.select { |node| FinancialNodeClassifier.summary_row?(node) }.each do |node|
       target = FinancialNodeClassifier.summary_target_node(node)
-      totals = totals_by_node_id[target&.id]
+      totals = table_local_summary_totals(node, nodes, totals_by_node_id, duplicate_authority_by_mirror_id)
+      totals = totals_by_node_id[target&.id] if totals.blank?
       next if totals.blank?
 
       replace_node_funding_with_totals!(node, totals)
     end
+  end
+
+  def table_local_summary_totals(summary_node, nodes, totals_by_node_id, duplicate_authority_by_mirror_id)
+    return {} unless flat_subprogram_summary_row?(summary_node)
+
+    candidates = nodes.select do |node|
+      node.id != summary_node.id &&
+        node.parent_id == summary_node.parent_id &&
+        node.source_table_index == summary_node.source_table_index &&
+        node.source_row_index.present? &&
+        node.source_row_index.to_i < summary_node.source_row_index.to_i &&
+        !FinancialNodeClassifier.summary_row?(node) &&
+        !duplicate_authority_by_mirror_id.key?(node.id)
+    end
+    merge_totals(candidates.filter_map { |node| totals_by_node_id[node.id] })
+  end
+
+  def flat_subprogram_summary_row?(node)
+    return false unless node&.parent&.node_type == "program"
+    return false if node.source_table_index.blank? || node.source_row_index.blank?
+
+    normalize_name([node.display_number, node.name].compact.join(" ")).include?("итого по подпрограмме")
+  end
+
+  def sync_duplicate_finance_rows!(nodes, duplicate_authority_by_mirror_id, totals_by_node_id)
+    return if duplicate_authority_by_mirror_id.blank?
+
+    nodes_by_id = nodes.index_by(&:id)
+    duplicate_authority_by_mirror_id.each do |mirror_id, authority_id|
+      mirror = nodes_by_id[mirror_id]
+      authority = nodes_by_id[authority_id]
+      next unless mirror && authority
+
+      totals = totals_by_node_id[authority.id] || aggregate_lines(authority.funding_lines)
+      next if totals.blank?
+
+      replace_node_funding_with_totals!(mirror, totals)
+      totals_by_node_id[mirror.id] = totals
+    end
+  end
+
+  def duplicate_finance_row_authority_map(nodes, children_by_parent)
+    duplicate_finance_row_groups(nodes).each_with_object({}) do |(_key, group), result|
+      next if group.size < 2
+
+      authority = duplicate_finance_row_authority(group, children_by_parent)
+      group.each do |node|
+        result[node.id] = authority.id unless node.id == authority.id
+      end
+    end
+  end
+
+  def duplicate_finance_row_groups(nodes)
+    nodes.select { |node| duplicate_finance_row_candidate?(node) }
+      .group_by { |node| duplicate_finance_row_key(node) }
+      .select { |_key, group| group.size > 1 }
+  end
+
+  def duplicate_finance_row_candidate?(node)
+    node.source_table_index.present? &&
+      node.source_row_index.present? &&
+      node.metadata.to_h["source"].to_s.start_with?("finance")
+  end
+
+  def duplicate_finance_row_key(node)
+    [
+      node.parent_id,
+      node.source_table_index,
+      normalize_display_number(node.display_number),
+      normalize_name(node.name)
+    ]
+  end
+
+  def duplicate_finance_row_authority(group, children_by_parent)
+    nodes_with_children = group.select do |node|
+      children_by_parent.fetch(node.id, []).any? { |child| !FinancialNodeClassifier.summary_row?(child) }
+    end
+    candidates = nodes_with_children.presence || group
+    candidates.max_by { |node| duplicate_finance_row_authority_score(node) }
+  end
+
+  def duplicate_finance_row_authority_score(node)
+    [
+      node.funding_lines.sum { |line| BigDecimal(line.amount_rub.to_s).abs },
+      -node.source_row_index.to_i
+    ]
+  end
+
+  def normalize_display_number(value)
+    value.to_s.strip.sub(/\.+\z/, "")
   end
 
   def reconcile_to_external_target!(target_version)
@@ -585,18 +813,37 @@ class ChangeSetApplicationService
     document = external_financial_target_document
     return {} unless document&.xlsx_finance?
 
-    program_total_row = Array(document.parsed_payload["rows"]).detect do |row|
+    payload = document.parsed_payload || {}
+    object_group_totals = source_totals_from_object_groups(payload)
+    return object_group_totals if object_group_totals.present?
+
+    program_total_row = Array(payload["rows"]).detect do |row|
       row["row_type"].to_s == "PROGRAM_TOTAL_ROW" && row["funding"].present?
     end
     funding = program_total_row&.fetch("funding", nil) || {}
-    funding.each_with_object({}) do |(key, amount), result|
+    source_totals_from_funding_hash(funding)
+  rescue ArgumentError
+    {}
+  end
+
+  def source_totals_from_object_groups(payload)
+    Array(payload["object_groups"]).each_with_object({}) do |group, result|
+      source_totals_from_funding_hash(group["funding"]).each do |key, amount|
+        result[key] = (result[key] || BigDecimal("0")) + amount
+      end
+    end
+  end
+
+  def source_totals_from_funding_hash(funding)
+    (funding || {}).to_h.each_with_object({}) do |(key, amount), result|
       year, source_type = key.to_s.split("::", 2)
       next if year.blank? || source_type.blank?
 
-      result[[year.to_i, funding_source_value(source_type)]] = BigDecimal(amount.to_s)
+      normalized_source = funding_source_value(source_type)
+      next if normalized_source == "UNKNOWN"
+
+      result[[year.to_i, normalized_source]] = BigDecimal(amount.to_s)
     end
-  rescue ArgumentError
-    {}
   end
 
   def root_source_totals(target_version)
@@ -631,19 +878,30 @@ class ChangeSetApplicationService
   end
 
   def replace_node_funding_with_totals!(node, totals)
-    existing_by_key = node.funding_lines.index_by { |line| [line.year, funding_source_value(line.source_type)] }
+    existing_lines = node.funding_lines.to_a
+    existing_by_key = existing_lines.index_by { |line| [line.year, funding_source_value(line.source_type)] }
     node.funding_lines.destroy_all
     totals.each do |(year, source_type), amount|
       previous = existing_by_key[[year, source_type]]
+      reference = previous ||
+        existing_lines.detect { |line| funding_source_value(line.source_type) == funding_source_value(source_type) } ||
+        existing_lines.first
       node.funding_lines.create!(
         year: year,
         source_type: funding_source_key(source_type),
         amount_rub: amount,
-        amount_kind: previous&.amount_kind || "planned",
-        source_document: previous&.source_document,
-        source_row_ref: previous&.source_row_ref,
-        raw_source_name: previous&.raw_source_name || source_type,
-        metadata: previous&.metadata || {}
+        amount_kind: previous&.amount_kind || reference&.amount_kind || "planned",
+        source_document: previous&.source_document || reference&.source_document,
+        source_row_ref: previous&.source_row_ref || reference&.source_row_ref,
+        raw_source_name: previous&.raw_source_name || reference&.raw_source_name || source_type,
+        metadata: funding_line_metadata_for(
+          node,
+          year,
+          source_type,
+          source_line: previous,
+          reference_line: reference,
+          candidate_lines: existing_lines
+        )
       )
     end
   end
@@ -743,10 +1001,11 @@ class ChangeSetApplicationService
     row_offsets_by_anchor = Hash.new(0)
     Array(new_object_result["created_groups"]).filter_map do |group|
       node = target_version.program_nodes.includes(:funding_lines, :parent).find_by(id: group["target_node_id"])
-      next unless node&.parent
+      anchor_parent = docx_anchor_parent(target_version, node)
+      next unless node && anchor_parent
       next if node.metadata&.dig("docx_virtual_residual")
 
-      anchor = docx_insert_anchor(node.parent, node)
+      anchor = docx_insert_anchor(anchor_parent, node)
       next unless anchor
 
       rows = docx_insert_rows(node)
@@ -771,10 +1030,11 @@ class ChangeSetApplicationService
         "table_index" => anchor["table_index"],
         "insert_after_row_index" => anchor["insert_after_row_index"],
         "template_row_index" => anchor["template_row_index"],
-        "parent_display_number" => node.parent.display_number,
+        "parent_display_number" => anchor_parent.display_number,
         "display_number" => node.display_number,
         "object_name" => node.name,
         "execution_period" => node.execution_period.presence || execution_period_from_lines(node.funding_lines),
+        "responsible" => node.responsible.presence || node.metadata&.dig("responsible"),
         "active_years" => active_years_for_lines(node.funding_lines),
         "total_cell_index" => 4,
         "year_cell_indices" => year_cell_indices_for(target_version, anchor["table_index"]),
@@ -783,20 +1043,38 @@ class ChangeSetApplicationService
     end
   end
 
+  def docx_anchor_parent(target_version, node)
+    return nil unless node
+
+    anchor_id = node.metadata&.dig("docx_anchor_parent_node_id")
+    return target_version.program_nodes.find_by(id: anchor_id) if anchor_id.present?
+
+    node.parent
+  end
+
   def docx_insert_anchor(parent, node)
     table_index = parent.source_table_index
     return nil if table_index.blank?
 
-    siblings = parent.children
-      .where.not(id: node.id)
-      .where(source_table_index: table_index)
-      .where.not(source_row_index: nil)
-      .order(source_row_index: :asc)
-      .to_a
-      .reject { |child| child.metadata&.dig("source_change_set_id").present? }
-      .select { |child| finance_display_number?(child.display_number) }
-    last_sibling = siblings.last
-    insert_after_row_index = occupied_last_row_index(last_sibling) || occupied_last_row_index(parent) || parent.source_row_index
+    last_sibling = if activity_aggregate_node?(node)
+      previous_activity_aggregate_table_sibling(parent, node)
+    else
+      parent.children
+        .where.not(id: node.id)
+        .where(source_table_index: table_index)
+        .where.not(source_row_index: nil)
+        .order(source_row_index: :asc)
+        .to_a
+        .reject { |child| child.metadata&.dig("source_change_set_id").present? }
+        .select { |child| finance_display_number?(child.display_number) }
+        .last
+    end
+    insert_after_row_index =
+      if activity_aggregate_node?(node)
+        activity_aggregate_insert_after_row_index(parent, node, last_sibling)
+      else
+        occupied_last_row_index(last_sibling) || occupied_last_row_index(parent) || parent.source_row_index
+      end
     return nil if insert_after_row_index.blank?
 
     {
@@ -804,6 +1082,54 @@ class ChangeSetApplicationService
       "insert_after_row_index" => insert_after_row_index,
       "template_row_index" => last_sibling&.source_row_index || insert_after_row_index
     }
+  end
+
+  def previous_activity_aggregate_table_sibling(parent, node)
+    prefix = parent.display_number.to_s.sub(/\.+\z/, "")
+    return nil if prefix.blank?
+
+    node_display = display_number_segments(node.display_number)
+    table_index = parent.source_table_index
+    candidates = node.program_version.program_nodes
+      .where(source_table_index: table_index)
+      .where.not(id: node.id)
+      .where.not(source_row_index: nil)
+      .to_a
+      .reject { |candidate| candidate.metadata&.dig("source_change_set_id").present? }
+      .select { |candidate| same_activity_display_level?(candidate.display_number, prefix) }
+      .select { |candidate| display_number_before?(candidate.display_number, node_display) }
+    candidates.max_by { |candidate| display_number_segments(candidate.display_number) }
+  end
+
+  def activity_aggregate_insert_after_row_index(parent, node, last_sibling)
+    base_row = occupied_last_row_index(last_sibling) || occupied_last_row_index(parent) || parent.source_row_index
+    return base_row if base_row.blank? || last_sibling.blank?
+
+    candidate_row = base_row.to_i + 1
+    next_row = next_activity_aggregate_table_sibling_row(parent, node)
+    return candidate_row if next_row.blank?
+
+    upper_bound = next_row.to_i - 1
+    upper_bound >= base_row.to_i ? [candidate_row, upper_bound].min : base_row
+  end
+
+  def next_activity_aggregate_table_sibling_row(parent, node)
+    prefix = parent.display_number.to_s.sub(/\.+\z/, "")
+    return nil if prefix.blank?
+
+    node_display = display_number_segments(node.display_number)
+    parent.program_version.program_nodes
+      .where(source_table_index: parent.source_table_index)
+      .where.not(id: node.id)
+      .where.not(source_row_index: nil)
+      .to_a
+      .reject { |candidate| candidate.metadata&.dig("source_change_set_id").present? }
+      .select { |candidate| same_activity_display_level?(candidate.display_number, prefix) }
+      .select { |candidate| display_number_after?(candidate.display_number, node_display) }
+      .map(&:source_row_index)
+      .compact
+      .map(&:to_i)
+      .min
   end
 
   def occupied_last_row_index(node)
@@ -833,10 +1159,43 @@ class ChangeSetApplicationService
 
       result[line.year.to_s] ||= cell_index.to_i
     end
-    return mapped if mapped.any?
+    return filled_year_cell_indices(mapped, target_version) if mapped.any?
 
-    years = target_version.municipal_program.period_start_year..target_version.municipal_program.period_end_year
+    years = program_years_for(target_version)
     years.each_with_index.to_h { |year, offset| [year.to_s, 4 + offset] }
+  end
+
+  def filled_year_cell_indices(mapped, target_version)
+    years = program_years_for(target_version, mapped)
+    present = mapped.transform_keys(&:to_i).transform_values(&:to_i)
+    return mapped if present.empty?
+
+    base_year, base_cell = present.min_by { |year, _cell| year }
+    years.each do |year|
+      next if present.key?(year)
+
+      candidate_cell = base_cell + (year - base_year)
+      next unless candidate_cell.positive?
+
+      present[year] = candidate_cell
+    end
+    present.sort.to_h.transform_keys(&:to_s)
+  end
+
+  def program_years_for(target_version, mapped = {})
+    start_year = target_version.municipal_program.period_start_year.to_i
+    end_year = target_version.municipal_program.period_end_year.to_i
+    return (start_year..end_year).to_a if start_year.positive? && end_year >= start_year
+
+    years = mapped.keys.map(&:to_i).select(&:positive?)
+    if years.empty?
+      years = target_version.program_nodes
+        .includes(:funding_lines)
+        .flat_map { |node| node.funding_lines.map { |line| line.year.to_i } }
+        .select(&:positive?)
+    end
+    min_year, max_year = years.minmax
+    min_year && max_year ? (min_year..max_year).to_a : []
   end
 
   def docx_insert_rows(node)
@@ -847,37 +1206,62 @@ class ChangeSetApplicationService
     total_by_year = years.index_with do |year|
       lines.select { |line| line.year == year }.sum(BigDecimal("0")) { |line| BigDecimal(line.amount_rub.to_s) }
     end
-    rows = [
-      {
-        "source_type" => "TOTAL",
-        "source_label" => "Итого",
-        "total_amount_rub" => total_by_year.values.sum(BigDecimal("0")).to_s("F"),
-        "amounts_by_year" => total_by_year.transform_values { |amount| amount.to_s("F") },
-        "unit" => "thousand_rub"
-      }
-    ]
-
     source_lines_by_type = lines.group_by { |line| funding_source_value(line.source_type) }
-    docx_insert_source_types(node, lines).each do |source_type|
+    source_types = docx_insert_source_types(node, lines)
+    source_rows = source_types.map do |source_type|
       source_lines = source_lines_by_type.fetch(source_type, [])
       amounts_by_year = years.index_with do |year|
         source_lines.select { |line| line.year == year }.sum(BigDecimal("0")) { |line| BigDecimal(line.amount_rub.to_s) }
       end
-      rows << {
+      {
         "source_type" => source_type,
         "source_label" => source_label_for(node, source_type),
-        "total_amount_rub" => amounts_by_year.values.sum(BigDecimal("0")).to_s("F"),
+        "total_amount_rub" => display_total_amount(amounts_by_year.values).to_s("F"),
         "amounts_by_year" => amounts_by_year.transform_values { |amount| amount.to_s("F") },
         "unit" => "thousand_rub"
       }
     end
+    total_amount = display_total_amount(total_by_year.values)
+    total_amount *= source_types.size if activity_aggregate_node?(node) && source_types.size > 1
+    total_row = {
+      "source_type" => "TOTAL",
+      "source_label" => activity_aggregate_node?(node) ? "Итого:" : "Итого",
+      "total_amount_rub" => total_amount.to_s("F"),
+      "amounts_by_year" => total_by_year.transform_values { |amount| amount.to_s("F") },
+      "unit" => "thousand_rub"
+    }
+    rows = [
+      {
+        "source_type" => "TOTAL",
+        "source_label" => total_row["source_label"],
+        "total_amount_rub" => total_row["total_amount_rub"],
+        "amounts_by_year" => total_row["amounts_by_year"],
+        "unit" => total_row["unit"]
+      }
+    ]
 
-    rows
+    activity_aggregate_node?(node) ? source_rows + [total_row] : rows + source_rows
+  end
+
+  def display_total_amount(amounts)
+    amounts.sum(BigDecimal("0")) { |amount| document_display_amount(amount, "thousand_rub") }
+  end
+
+  def document_display_amount(amount, unit)
+    amount = BigDecimal(amount.to_s)
+    return amount unless unit.to_s == "thousand_rub"
+
+    (amount / 1000).round(2) * 1000
   end
 
   def docx_insert_source_types(node, lines)
     node_source_types = lines.map { |line| funding_source_value(line.source_type) }.uniq
-    context_source_types = Array(node.parent&.funding_lines).map { |line| funding_source_value(line.source_type) }.uniq
+    anchor_parent = docx_anchor_parent(node.program_version, node)
+    context_nodes = [anchor_parent, node.parent]
+    context_nodes.concat(anchor_parent.children.to_a) if anchor_parent
+    context_nodes.concat(node.parent.children.to_a) if node.parent
+    context_nodes = context_nodes.compact.uniq
+    context_source_types = context_nodes.flat_map { |candidate| candidate.funding_lines.map { |line| funding_source_value(line.source_type) } }.uniq
     source_types = (context_source_types + node_source_types).uniq
     source_types = node_source_types if source_types.empty?
     source_types.sort_by { |source_type| source_sort_order(source_type) }
@@ -993,7 +1377,11 @@ class ChangeSetApplicationService
   end
 
   def partial_source_mode?
-    effective_source_mode.in?(%w[pdf_patch manual_instruction])
+    effective_source_mode == "pdf_patch"
+  end
+
+  def manual_instruction_source_mode?
+    effective_source_mode == "manual_instruction"
   end
 
   def xlsx_target_source_mode?
@@ -1067,18 +1455,33 @@ class ChangeSetApplicationService
 
   def resolve_parent_node(target_version, item)
     reference = item.source_reference || {}
+    if reference["anchor_parent_node_id"].present?
+      explicit_parent = target_version.program_nodes.find_by(id: reference["anchor_parent_node_id"])
+      return explicit_parent if explicit_parent
+    end
+
     parsed = parse_external_parent_code(reference["parent_activity_code"].presence || reference["group_key"])
     return nil unless parsed
 
-    parent_candidates(target_version.program_nodes, parsed).first
+    parent_candidates(
+      target_version.program_nodes,
+      parsed,
+      activity_aggregate: reference["group_status"].to_s == "ACTIVITY_AGGREGATE"
+    ).first
   end
 
-  def parent_candidates(scope, parsed)
+  def parent_candidates(scope, parsed, activity_aggregate: false)
+    return main_activity_parent_candidates(scope, parsed) if activity_aggregate
+
     activity_candidates = scoped_parent_candidates(scope, parsed[:activity_code])
     activity_matches = activity_candidates.select { |node| parent_activity_matches?(node, parsed) }
     return activity_matches if activity_matches.any?
     return activity_candidates if parsed[:activity_code].present? && activity_candidates.one?
 
+    main_activity_parent_candidates(scope, parsed)
+  end
+
+  def main_activity_parent_candidates(scope, parsed)
     main_candidates = scoped_parent_candidates(scope, parsed[:main_activity_code])
     main_matches = main_candidates.select { |node| parent_main_activity_matches?(node, parsed) }
     return main_matches if main_matches.any?
@@ -1094,17 +1497,27 @@ class ChangeSetApplicationService
   end
 
   def parent_activity_matches?(node, parsed)
-    subprogram_matches = parsed[:subprogram_display].blank? || node_subprogram_display(node).to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = node_subprogram_matches?(node, parsed)
     activity_matches = node.code.to_s == parsed[:activity_code].to_s || node.display_number.to_s == parsed[:activity_display].to_s
 
     subprogram_matches && activity_matches
   end
 
   def parent_main_activity_matches?(node, parsed)
-    subprogram_matches = parsed[:subprogram_display].blank? || node_subprogram_display(node).to_s == parsed[:subprogram_display].to_s
+    subprogram_matches = node_subprogram_matches?(node, parsed)
     main_matches = node.code.to_s == parsed[:main_activity_code].to_s || node.display_number.to_s == parsed[:main_activity_display].to_s
 
     subprogram_matches && main_matches
+  end
+
+  def node_subprogram_matches?(node, parsed)
+    expected = parsed[:subprogram_display].to_s
+    return true if expected.blank?
+
+    return true if node_subprogram_display(node).to_s == expected
+
+    shifted_expected = expected.to_i - 1 if expected.match?(/\A\d+\z/) && expected.to_i > 1
+    shifted_expected.present? && node_finance_table_index(node).to_s == shifted_expected.to_s
   end
 
   def activity_parent_candidate?(node)
@@ -1120,12 +1533,17 @@ class ChangeSetApplicationService
 
   def node_subprogram_display(node)
     ancestor_of_type(node, "subprogram")&.display_number.presence ||
-      node.metadata.to_h["finance_table_index"].presence&.to_s
+      node_finance_table_index(node)&.to_s
+  end
+
+  def node_finance_table_index(node)
+    node.metadata.to_h["finance_table_index"].presence ||
+      ancestor_of_type(node, "main_activity")&.metadata.to_h["finance_table_index"].presence
   end
 
   def parse_external_parent_code(raw_code)
     digits = raw_code.to_s.gsub(/\D/, "")
-    return nil if digits.length < 7 || !digits.start_with?("10")
+    return nil if digits.length < 7
 
     subprogram = digits[2].to_i
     main_activity = digits[3, 2].to_i
@@ -1151,6 +1569,46 @@ class ChangeSetApplicationService
     nil
   end
 
+  def new_object_tree_parent(anchor_parent, items)
+    if activity_aggregate_items?(items)
+      return activity_aggregate_tree_parent(anchor_parent) || anchor_parent.parent || anchor_parent
+    end
+
+    anchor_parent
+  end
+
+  def activity_aggregate_tree_parent(anchor_parent)
+    return nil unless anchor_parent
+    return anchor_parent if %w[main_activity activity].include?(anchor_parent.node_type) && !FinancialNodeClassifier.summary_row?(anchor_parent)
+
+    anchor_parent.parent&.children&.detect do |candidate|
+      next false if candidate.id == anchor_parent.id
+      next false unless %w[main_activity activity].include?(candidate.node_type)
+      next false if FinancialNodeClassifier.summary_row?(candidate)
+
+      candidate.source_table_index.to_s == anchor_parent.source_table_index.to_s &&
+        normalize_display_number(candidate.display_number) == normalize_display_number(anchor_parent.display_number) &&
+        normalize_name(candidate.name) == normalize_name(anchor_parent.name)
+    end
+  end
+
+  def new_object_display_number(parent, items)
+    if activity_aggregate_items?(items)
+      activity_display = activity_aggregate_display_number(items)
+      return activity_display if activity_display.present?
+    end
+
+    next_child_display_number(parent)
+  end
+
+  def new_object_code(items)
+    activity_code = activity_aggregate_activity_code(items)
+    return activity_code if activity_code.present?
+
+    reference = items.first.source_reference || {}
+    reference["object_code"].presence
+  end
+
   def new_object_name(items)
     first = items.first
     reference = first.source_reference || {}
@@ -1160,7 +1618,109 @@ class ChangeSetApplicationService
       return ["Неуказанное направление", ("строка Excel #{row_number}" if row_number)].compact.join(" - ")
     end
 
+    return activity_aggregate_name(reference, name) if activity_aggregate_items?(items)
+
     residual_group?(items) ? canonical_residual_name(name) : name
+  end
+
+  def activity_aggregate_name(reference, name)
+    parsed = parse_external_parent_code(reference["parent_activity_code"].presence || reference["group_key"])
+    activity_code = reference["activity_code"].presence || parsed&.fetch(:activity_code, nil)
+    clean_name = name.to_s.sub(/\A\s*Мероприятие\s+\d{2}\.\d{2}\.?\s*/i, "").squish
+    return clean_name if activity_code.blank?
+
+    "Мероприятие #{activity_code}. #{clean_name}"
+  end
+
+  def activity_aggregate_items?(items)
+    reference = items.first.source_reference || {}
+    reference["group_status"].to_s == "ACTIVITY_AGGREGATE"
+  end
+
+  def activity_aggregate_node?(node)
+    node&.metadata&.dig("group_status").to_s == "ACTIVITY_AGGREGATE"
+  end
+
+  def activity_aggregate_activity_code(items)
+    reference = items.first.source_reference || {}
+    return reference["activity_code"] if reference["activity_code"].present?
+
+    parse_external_parent_code(reference["parent_activity_code"].presence || reference["group_key"])&.fetch(:activity_code, nil)
+  end
+
+  def activity_aggregate_display_number(items)
+    reference = items.first.source_reference || {}
+    return reference["activity_display"] if reference["activity_display"].present?
+
+    parsed = parse_external_parent_code(reference["parent_activity_code"].presence || reference["group_key"])
+    return nil unless parsed
+
+    parsed[:activity_display]
+  end
+
+  def renumber_activity_aggregate_siblings!(target_version, anchor_parent, inserted_node)
+    prefix = anchor_parent.display_number.to_s.sub(/\.+\z/, "")
+    return if prefix.blank?
+
+    siblings = target_version.program_nodes
+      .where(source_table_index: anchor_parent.source_table_index)
+      .to_a
+      .reject { |node| FinancialNodeClassifier.summary_row?(node) }
+      .select { |node| node.id == inserted_node.id || same_activity_display_level?(node.display_number, prefix) }
+      .select { |node| activity_code_sort_value(node).positive? || node.id == inserted_node.id }
+      .group_by { |node| activity_aggregate_group_key(node) }
+      .values
+      .sort_by do |group|
+        [
+          group.map { |node| activity_code_sort_value(node) }.select(&:positive?).min || 0,
+          group.map { |node| display_number_segments(node.display_number) }.min || [],
+          group.map(&:id).min || 0
+        ]
+      end
+
+    siblings.each_with_index do |group, index|
+      display_number = "#{prefix}.#{index + 1}"
+      group.each do |node|
+        next if node.display_number.to_s.sub(/\.+\z/, "") == display_number
+
+        metadata = node.metadata || {}
+        metadata = metadata.merge("docx_display_number_changed_from" => node.display_number) if node.source_row_index.present?
+        node.update!(display_number: display_number, metadata: metadata)
+      end
+    end
+  end
+
+  def activity_aggregate_group_key(node)
+    code = node.code.to_s
+    return "code:#{code}" if code.match?(/\A\d{2}\.\d{2}\z/)
+
+    "node:#{node.id}"
+  end
+
+  def activity_code_sort_value(node)
+    code = node.code.to_s
+    return code.split(".").last.to_i if code.match?(/\A\d{2}\.\d{2}\z/)
+
+    (display_number_segments(node.display_number).last || 0).to_i
+  end
+
+  def same_activity_display_level?(display_number, prefix)
+    display = display_number.to_s.sub(/\.+\z/, "")
+    display.match?(/\A#{Regexp.escape(prefix)}\.\d+\z/)
+  end
+
+  def display_number_segments(display_number)
+    display_number.to_s.sub(/\.+\z/, "").split(".").map(&:to_i)
+  end
+
+  def display_number_before?(display_number, segments)
+    comparison = display_number_segments(display_number) <=> Array(segments).map(&:to_i)
+    comparison && comparison.negative?
+  end
+
+  def display_number_after?(display_number, segments)
+    comparison = display_number_segments(display_number) <=> Array(segments).map(&:to_i)
+    comparison && comparison.positive?
   end
 
   def residual_group?(items)
@@ -1224,9 +1784,34 @@ class ChangeSetApplicationService
     prefix.present? ? "#{prefix}.#{next_number}" : next_number.to_s
   end
 
-  def execution_period_for_items(items)
+  def execution_period_for_items(items, anchor_parent: nil)
+    if activity_aggregate_items?(items)
+      period = activity_aggregate_period(anchor_parent)
+      return period if period.present?
+    end
+
     years = items.map(&:year).compact.sort
     execution_period_for_years(years)
+  end
+
+  def activity_aggregate_period(anchor_parent)
+    return nil unless anchor_parent
+
+    anchor_parent.execution_period.presence ||
+      table_activity_sibling_period(anchor_parent).presence
+  end
+
+  def table_activity_sibling_period(anchor_parent)
+    prefix = anchor_parent.display_number.to_s.sub(/\.+\z/, "")
+    return nil if prefix.blank?
+
+    anchor_parent.program_version.program_nodes
+      .where(source_table_index: anchor_parent.source_table_index)
+      .where.not(source_row_index: nil)
+      .to_a
+      .select { |node| same_activity_display_level?(node.display_number, prefix) }
+      .filter_map { |node| node.execution_period.presence }
+      .first
   end
 
   def execution_period_for_years(years)

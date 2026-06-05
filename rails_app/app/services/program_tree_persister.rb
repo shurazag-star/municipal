@@ -57,9 +57,11 @@ class ProgramTreePersister
   end
 
   def ensure_version!(program)
-    existing = program.program_versions.detect do |version|
-      version.import_summary.to_h["source_document_id"].to_i == @source_document.id
-    end
+    existing = program.program_versions
+      .where(status: %w[uploaded_active uploaded_inactive imported])
+      .where("import_summary ->> 'source_document_id' = ?", @source_document.id.to_s)
+      .order(:id)
+      .first
     return existing if existing
 
     program.program_versions.create!(

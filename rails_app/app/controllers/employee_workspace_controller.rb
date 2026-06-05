@@ -45,11 +45,11 @@ class EmployeeWorkspaceController < ApplicationController
   end
 
   def latest_document(type)
-    current_organization.source_documents.where(document_type: type).order(updated_at: :desc, id: :desc).first
+    employee_source_documents.where(document_type: type).order(updated_at: :desc, id: :desc).first
   end
 
   def latest_change_source
-    current_organization.source_documents
+    employee_source_documents
       .where(document_type: %w[xlsx_finance pdf_agreement])
       .order(updated_at: :desc, id: :desc)
       .first
@@ -67,10 +67,23 @@ class EmployeeWorkspaceController < ApplicationController
   end
 
   def current_program
-    @current_program ||= current_organization.municipal_programs
-      .includes(:current_version)
-      .order(updated_at: :desc, id: :desc)
-      .first
+    @current_program ||= begin
+      document = latest_document("docx_program")
+      version = if document
+        current_organization.program_versions
+          .where("program_versions.import_summary ->> 'source_document_id' = ?", document.id.to_s)
+          .order(:id)
+          .last
+      end
+      version&.municipal_program || current_organization.municipal_programs
+        .includes(:current_version)
+        .order(updated_at: :desc, id: :desc)
+        .first
+    end
+  end
+
+  def employee_source_documents
+    current_organization.source_documents.where(created_by: current_user)
   end
 
   def approved_change_sets

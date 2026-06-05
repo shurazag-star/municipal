@@ -68,7 +68,8 @@ class AnalysisSessionRunner
       else
         SourceModeResolver.new(
           organization: @organization,
-          requested_mode: requested_source_mode
+          requested_mode: requested_source_mode,
+          user: @analysis_session.user
         ).calculation_documents
       end
     end
@@ -138,7 +139,8 @@ class AnalysisSessionRunner
     @source_mode_summary ||= begin
       resolver = SourceModeResolver.new(
         organization: @organization,
-        requested_mode: requested_source_mode
+        requested_mode: requested_source_mode,
+        user: @analysis_session.user
       )
       resolver.summary.merge((@analysis_session.summary || {}).slice(
         "calculation_source_document_ids",

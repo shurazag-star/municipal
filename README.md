@@ -168,6 +168,33 @@ organization: Муниципальный округ Шатура
 LOAD_DEMO_DATA=true docker-compose exec -T web bin/rails db:seed
 ```
 
+## Муниципальные tenant-профили
+
+Один Rails/Railway деплой обслуживает несколько муниципалитетов через разные `Organization`.
+Документы, чат, версии программы, проекты изменений, настройки агента и пользователи привязаны к организации.
+
+Текущий рабочий tenant Люберец можно пометить без переноса документов, указав id существующей организации:
+
+```bash
+LYUBERTSY_ORGANIZATION_ID=<id> \
+LYUBERTSY_ADMIN_EMAIL=<admin-email> \
+LYUBERTSY_EMPLOYEE_EMAIL=<employee-email> \
+bin/rails municipal:provision_lyubertsy
+```
+
+Шатура создается отдельной организацией и клонирует базовые настройки агента с Люберец, но дальше редактируется независимо:
+
+```bash
+PROVISION_SHATURA=true \
+SHATURA_ADMIN_EMAIL=<admin-email> \
+SHATURA_ADMIN_PASSWORD=<secret> \
+SHATURA_EMPLOYEE_EMAIL=<employee-email> \
+SHATURA_EMPLOYEE_PASSWORD=<secret> \
+bin/rails municipal:provision_shatura
+```
+
+В production реальные пароли задаются только через переменные окружения. Загруженные документы Люберец и Шатуры не смешиваются, потому что все выборки идут через `current_organization`.
+
 ## OpenRouter
 
 Ключ не хранится в репозитории. Для подключения LLM заполните локальный `.env` или внешний env-файл в `~/.codex/secrets`:

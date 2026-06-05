@@ -72,6 +72,20 @@ class AgentToolRegistryTest < ActiveSupport::TestCase
     assert_nil registry.send(:reusable_change_project, resolver)
   end
 
+  test "fresh full document generation command does not reuse existing project" do
+    registry = AgentToolRegistry.new(organization: @organization, user: @user)
+    resolver = SourceModeResolver.new(organization: @organization, requested_mode: "xlsx_target")
+
+    assert @change_set.draft?
+    assert_equal @change_set, registry.send(:reusable_change_project, resolver)
+    assert registry.send(
+      :force_fresh_analysis?,
+      {
+        "_user_content" => "Проанализируй все загруженные файлы, пересчитай суммы и сформируй новую редакцию Word-документа."
+      }
+    )
+  end
+
   test "chat recalculation creates checked docx workflow for explicit object amount" do
     previous_validator = Rails.application.config.x.post_export_validator
     begin
@@ -348,6 +362,50 @@ class AgentToolRegistryTest < ActiveSupport::TestCase
 
     assert_equal "needs_clarification", result["status"]
     assert_match(/активную.*черновик/i, result["clarification_question"])
+  end
+
+  test "full document generation command bypasses existing validated draft choice" do
+    draft_version = @program.program_versions.create!(created_by: @user, version_number: 2, status: "generated_validated")
+    change_set = ChangeSet.create!(
+      program_version: @version,
+      target_program_version: draft_version,
+      status: "applied",
+      summary: "Проверенный черновик",
+      created_by: @user,
+      export_summary: {
+        "post_export_validation" => { "status" => "valid" },
+        "agent_self_check" => { "status" => "passed" },
+        "independent_verifier" => { "status" => "passed" },
+        "manual_insert_required_count" => 0
+      }
+    )
+    change_set.generated_docx_attachment.attach(
+      io: StringIO.new("docx"),
+      filename: "generated.docx",
+      content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    change_set.change_report_attachment.attach(
+      io: StringIO.new("report"),
+      filename: "report.html",
+      content_type: "text/html"
+    )
+
+    result = AgentToolRegistry.new(organization: @organization, user: @user).execute(
+      "run_analysis",
+      context: {
+        "procedure" => { "loaded" => true },
+        "active_program" => { "loaded" => true, "program_version_id" => @version.id },
+        "conversation_memory" => { "working_state" => {} }
+      },
+      arguments: {
+        "_user_content" => "Проанализируй все загруженные файлы, пересчитай суммы и сформируй новую редакцию Word-документа.",
+        "source_mode" => "auto"
+      }
+    )
+
+    assert_equal "completed", result["status"]
+    assert_nil result["version_choices"]
+    assert_equal "xlsx_target", result["source_mode"]
   end
 
   test "document check uses approved generated docx as active program filename" do

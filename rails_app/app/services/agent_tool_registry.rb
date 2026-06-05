@@ -89,11 +89,11 @@ class AgentToolRegistry
     resolver = source_mode_resolver(arguments)
     missing = missing_analysis_inputs(context, resolver)
     return { "status" => "blocked", "missing" => missing } if missing.any?
-    if version_choice_needed?(arguments)
+    if version_choice_needed?(arguments) && !force_fresh_analysis?(arguments)
       return version_choice_response
     end
 
-    existing = reusable_change_project(resolver)
+    existing = force_fresh_analysis?(arguments) ? nil : reusable_change_project(resolver)
     if existing
       resolution = AgentAutonomousResolver.new(change_set: existing, user: @user).resolve!
       return {
@@ -127,6 +127,7 @@ class AgentToolRegistry
     change_set = AnalysisSessionRunner.new(session).run!
     resolution = change_set ? AgentAutonomousResolver.new(change_set: change_set, user: @user).resolve! : nil
     AuditLog.record!(@user, @organization, "analysis_session.completed", session, change_set_id: change_set&.id)
+    session.reload
 
     {
       "status" => "completed",
@@ -142,7 +143,8 @@ class AgentToolRegistry
       "source_mode_label" => session.summary["source_mode_label"],
       "evidence_source_document_ids" => session.summary["evidence_source_document_ids"] || [],
       "change_summary" => change_set ? change_summary(change_set) : {},
-      "items" => change_set ? preview_change_items(change_set).map { |item| change_item_summary(item) } : []
+      "items" => change_set ? preview_change_items(change_set).map { |item| change_item_summary(item) } : [],
+      "diagnostics" => analysis_diagnostics(session, resolver)
     }
   rescue StandardError => error
     { "status" => "failed", "error" => error.message, "error_class" => error.class.name }
@@ -160,6 +162,16 @@ class AgentToolRegistry
     return nil if duplicate_active_amount_updates?(change_set)
 
     selected_ids == previous_ids && SourceModeResolver.normalize(previous_mode) == resolver.mode ? change_set : nil
+  end
+
+  def force_fresh_analysis?(arguments)
+    return true if ActiveModel::Type::Boolean.new.cast(arguments.to_h["force_rebuild"])
+
+    normalized = normalize_name(arguments.to_h["_user_content"])
+    return false if normalized.blank?
+
+    normalized.match?(/(проанализ|анализ|пересчит|сопостав).*(сформир|нов.*редакц|docx|докс|word|ворд|документ|отчет)/) ||
+      normalized.match?(/(сформир|подготов|выгруз|созда).*(нов.*редакц|docx|докс|word|ворд|документ|отчет).*(проанализ|анализ|пересчит|сопостав)/)
   end
 
   def show_change_project
@@ -504,6 +516,9 @@ class AgentToolRegistry
   end
 
   def apply_manual_object_change(context, arguments)
+    batch_result = manual_batch_instruction_result(context, arguments)
+    return apply_manual_batch_change(context, arguments, batch_result) unless batch_result.status == "not_batch"
+
     instruction_result = manual_instruction_result(context, arguments)
     instruction = instruction_result.instruction
     manual_record = persist_manual_instruction!(instruction_result)
@@ -642,6 +657,248 @@ class AgentToolRegistry
     }
   rescue ArgumentError
     { "status" => "blocked", "missing" => ["сумма изменения"] }
+  end
+
+  def manual_batch_instruction_result(context, arguments)
+    text = arguments.to_h["_user_content"].presence || arguments.to_h["text_evidence"].presence
+    return ManualInstructionBatchExtractor::Result.new(status: "not_batch", instructions: [], missing_fields: []) if text.blank?
+
+    ManualInstructionBatchExtractor.new(organization: @organization, user: @user).call(text: text, context: context)
+  end
+
+  def apply_manual_batch_change(context, arguments, batch_result)
+    if batch_result.status != "complete"
+      return {
+        "status" => "needs_clarification",
+        "source_mode" => "manual_instruction",
+        "manual_batch_status" => "needs_clarification",
+        "missing" => batch_result.missing_fields,
+        "clarification_question" => batch_result.clarification_question
+      }
+    end
+
+    return version_choice_response if version_choice_needed?(arguments)
+
+    version = program_version_from_context(context, arguments)
+    return { "status" => "blocked", "missing" => ["текущая DOCX-программа"] } unless version
+
+    created_items = []
+    manual_records = []
+    change_set = nil
+    ActiveRecord::Base.transaction do
+      change_set = ChangeSet.create!(
+        program_version: version,
+        status: "draft",
+        summary: "Пакет ручных изменений из чата",
+        created_by: @user
+      )
+
+      batch_result.instructions.each_with_index do |instruction, index|
+        manual_record = persist_manual_batch_instruction!(instruction, change_set, index)
+        manual_records << manual_record
+        created_items.concat(create_manual_batch_items!(change_set, version, instruction, manual_record, index))
+      end
+
+      raise ActiveRecord::Rollback if created_items.empty?
+      change_set.refresh_summary!
+    end
+
+    return { "status" => "blocked", "missing" => ["изменения сумм"] } if change_set.blank? || created_items.empty?
+
+    result = ChangeSetApplicationService.new(change_set: change_set, user: @user).apply!
+    change_set.reload
+    AuditLog.record!(
+      @user,
+      @organization,
+      "manual_instruction.batch_applied",
+      change_set,
+      manual_instruction_ids: manual_records.map(&:id),
+      target_program_version_id: result.target_program_version&.id,
+      validation_status: change_set.export_summary.dig("post_export_validation", "status")
+    )
+
+    amount_updates = created_items.count { |item| item.change_type == "amount_update" }
+    new_objects = created_items.count { |item| item.change_type == "new_object" }
+    {
+      "status" => change_set.applied? ? "completed" : change_set.status,
+      "manual_change_status" => result.target_program_version&.status || change_set.status,
+      "manual_batch_status" => "completed",
+      "change_project_id" => change_set.id,
+      "change_set_id" => change_set.id,
+      "target_program_version_id" => result.target_program_version&.id,
+      "manual_instruction_ids" => manual_records.map(&:id),
+      "source_mode" => "manual_instruction",
+      "matched_count" => created_items.size,
+      "amount_update_items_count" => amount_updates,
+      "new_object_items_count" => new_objects,
+      "items" => created_items.map { |item| change_item_summary(item.reload) },
+      "docx_updated_cells" => result.docx_patch["applied_count"] || 0,
+      "docx_inserted_objects" => result.docx_patch["inserted_count"] || 0,
+      "manual_insert_required_count" => result.manual_insert_required_count,
+      "validation_errors" => Array(change_set.export_summary.dig("post_export_validation", "errors"))
+    }.merge(download_payload(change_set))
+  rescue ChangeSetApplicationService::Error => error
+    {
+      "status" => "failed",
+      "manual_batch_status" => "failed",
+      "error" => error.message,
+      "error_class" => error.class.name
+    }
+  end
+
+  def create_manual_batch_items!(change_set, version, instruction, manual_record, index)
+    case instruction["kind"]
+    when "new_object"
+      create_manual_batch_new_object_items!(change_set, version, instruction, manual_record, index)
+    else
+      create_manual_batch_amount_items!(change_set, version, instruction, manual_record)
+    end
+  end
+
+  def create_manual_batch_amount_items!(change_set, version, instruction, manual_record)
+    match = CandidateObjectFinder.new(version: version).call(instruction)
+    if match.status != "matched"
+      manual_record.update!(
+        structured_payload: instruction.merge("candidates" => match.candidates),
+        clarification_status: "needs_clarification"
+      )
+      raise ChangeSetApplicationService::Error, clarification_for_candidate_match(match)
+    end
+
+    node = match.node
+    manual_record.update!(program_node: node)
+    Array(instruction["amounts"]).filter_map do |amount_row|
+      source_type = funding_source_key(instruction["budget_source"])
+      year = amount_row["year"].to_i
+      old_amount = current_amount(node, year, source_type)
+      new_amount = BigDecimal(amount_row["amount_rub"].to_s)
+      delta = new_amount - old_amount
+      next if delta.zero?
+
+      create_manual_change_item!(
+        change_set,
+        node,
+        {
+          "operation" => "set_absolute",
+          "year" => year,
+          "source_type" => source_type,
+          "old_amount_rub" => old_amount,
+          "new_amount_rub" => new_amount,
+          "delta_rub" => delta,
+          "amount_rub" => new_amount,
+          "text_evidence" => instruction["text_evidence"]
+        },
+        instruction,
+        manual_record
+      )
+    end
+  end
+
+  def create_manual_batch_new_object_items!(change_set, version, instruction, manual_record, index)
+    anchor_parent = manual_batch_anchor_parent(version, instruction)
+    raise ChangeSetApplicationService::Error, "Не нашел основное мероприятие для нового объекта: #{instruction['main_activity_ref']}" unless anchor_parent
+
+    source_reference = manual_batch_new_object_reference(anchor_parent, instruction, index)
+    Array(instruction["amounts"]).filter_map do |amount_row|
+      amount = BigDecimal(amount_row["amount_rub"].to_s)
+      next if amount.zero?
+
+      change_set.change_items.create!(
+        change_type: "new_object",
+        status: "draft",
+        field_name: "object",
+        year: amount_row["year"].to_i,
+        source_type: funding_source_key(instruction["budget_source"]),
+        new_value: instruction["object_ref"],
+        new_amount_rub: amount,
+        delta_rub: amount,
+        source_reference: source_reference.merge("year" => amount_row["year"]),
+        confidence: "0.95",
+        requires_user_confirmation: false,
+        user_confirmed: true,
+        agent_resolution_status: "resolved",
+        agent_resolution_reason: "Новый объект задан пользователем в ручной инструкции.",
+        agent_resolver_model: "manual-batch-instruction-extractor",
+        agent_resolved_at: Time.current,
+        explanation: instruction["text_evidence"]
+      )
+    end.tap do |items|
+      manual_record.update!(operations_payload: instruction["amounts"], structured_payload: instruction.merge("anchor_parent_node_id" => anchor_parent.id))
+    end
+  end
+
+  def persist_manual_batch_instruction!(instruction, change_set, index)
+    first_amount = Array(instruction["amounts"]).first
+    ManualChangeInstruction.create!(
+      organization: @organization,
+      user: @user,
+      change_set: change_set,
+      source_mode: "manual_instruction",
+      operation: instruction["operation"].presence || "set_absolute",
+      object_ref: instruction["object_ref"],
+      subprogram_ref: instruction["subprogram_ref"],
+      main_activity_ref: instruction["main_activity_ref"],
+      activity_ref: instruction["activity_ref"].presence || instruction["activity_display"],
+      budget_source: instruction["budget_source"],
+      year: first_amount&.fetch("year", nil),
+      amount_rub: first_amount&.fetch("amount_rub", nil),
+      text_evidence: instruction["text_evidence"],
+      clarification_status: "complete",
+      confidence: "0.95",
+      structured_payload: instruction.merge("batch_index" => index),
+      operations_payload: instruction["amounts"] || []
+    )
+  end
+
+  def manual_batch_anchor_parent(version, instruction)
+    ref = normalize_name(instruction["main_activity_ref"])
+    code = instruction["activity_code"].to_s.split(".").first
+    candidates = version.program_nodes
+      .where(node_type: %w[main_activity activity object])
+      .includes(:funding_lines)
+      .to_a
+      .reject { |node| FinancialNodeClassifier.summary_row?(node) }
+    scored = candidates.filter_map do |node|
+      target = normalize_name([node.display_number, node.code, node.name].compact.join(" "))
+      score = 0
+      score += 6 if ref.present? && target.include?(ref)
+      score += 2 if code.present? && [node.code.to_s, node.display_number.to_s].include?(code.to_i.to_s)
+      score += 1 if node.node_type == "main_activity"
+      next if score.zero?
+
+      [score, node]
+    end
+    scored.max_by(&:first)&.last
+  end
+
+  def manual_batch_new_object_reference(anchor_parent, instruction, index)
+    parent_code = manual_batch_parent_activity_code(anchor_parent, instruction)
+    {
+      "document_type" => "manual_instruction",
+      "source_mode" => "manual_instruction",
+      "group_key" => [parent_code, parent_code, normalize_name(instruction["object_ref"])].join("::"),
+      "group_status" => "ACTIVITY_AGGREGATE",
+      "parent_activity_code" => parent_code,
+      "object_code" => parent_code,
+      "activity_code" => instruction["activity_code"],
+      "activity_display" => instruction["activity_display"],
+      "object_name" => instruction["object_ref"],
+      "responsible" => instruction["responsible"],
+      "execution_period" => instruction["execution_period"],
+      "anchor_parent_node_id" => anchor_parent.id,
+      "manual_batch_index" => index,
+      "evidence_text" => instruction["text_evidence"]
+    }.compact
+  end
+
+  def manual_batch_parent_activity_code(anchor_parent, instruction)
+    code = instruction["activity_code"].to_s
+    main, activity = code.split(".", 2).map(&:to_i)
+    main = anchor_parent.code.to_s[/\d+/].to_i if main.zero?
+    activity = 1 if activity.zero?
+    subprogram = anchor_parent.metadata.to_h["finance_table_index"].to_i + 1
+    subprogram = 1 if subprogram <= 0
+    "13#{subprogram}#{format('%02d', main)}#{format('%02d', activity)}00000000"
   end
 
   def manual_instruction_result(context, arguments)
@@ -919,12 +1176,14 @@ class AgentToolRegistry
     priority ||= source_mode == "pdf_patch" ? "pdf_agreement" : "xlsx_finance"
     priority = "manual_instruction" if source_mode == "manual_instruction"
 
-    @organization.update!(
-      settings: (@organization.settings || {}).merge(
-        "source_priority_policy" => priority == "pdf_agreement" ? "pdf_over_xlsx" : "xlsx_over_pdf",
-        "default_source_mode" => source_mode
+    if @user&.admin?
+      @organization.update!(
+        settings: (@organization.settings || {}).merge(
+          "source_priority_policy" => priority == "pdf_agreement" ? "pdf_over_xlsx" : "xlsx_over_pdf",
+          "default_source_mode" => source_mode
+        )
       )
-    )
+    end
     AuditLog.record!(
       @user,
       @organization,
@@ -1124,6 +1383,24 @@ class AgentToolRegistry
     source_mode_resolver(arguments).calculation_documents
   end
 
+  def analysis_diagnostics(session, resolver)
+    source_document = resolver.calculation_documents.first
+    payload = source_document&.parsed_payload || {}
+    summary = session.summary || {}
+    {
+      "source_document_id" => source_document&.id,
+      "source_document_type" => source_document&.document_type,
+      "filename" => source_document&.filename,
+      "object_groups_count" => Array(payload["object_groups"]).size,
+      "program_totals_count" => payload["program_totals"].to_h.size,
+      "final_totals_count" => payload["final_totals"].to_h.size,
+      "matched_count" => summary["matched_count"].to_i,
+      "unmatched_count" => summary["unmatched_count"].to_i,
+      "change_items_count" => summary["change_items_count"].to_i,
+      "source_mode" => summary["source_mode"]
+    }.compact
+  end
+
   def document_context_rows(context)
     rows = []
     procedure = context["procedure"] || {}
@@ -1195,7 +1472,7 @@ class AgentToolRegistry
   end
 
   def source_mode_resolver(arguments = {})
-    SourceModeResolver.new(organization: @organization, requested_mode: arguments["source_mode"])
+    SourceModeResolver.new(organization: @organization, requested_mode: arguments["source_mode"], user: @user)
   end
 
   def pending_count(change_set)

@@ -17,6 +17,35 @@ def test_format_money_for_docx_preserves_precision_and_grouping():
     assert formatted == "29 163,16"
 
 
+def test_format_money_for_docx_keeps_ungrouped_source_style():
+    formatted = format_money_for_docx(
+        Decimal("29163160.00"),
+        source_cell_raw_value="1000,00",
+        unit="thousand_rub",
+    )
+
+    assert formatted == "29163,16"
+
+
+def test_patch_docx_replaces_old_approval_date_with_placeholders(tmp_path):
+    source_path = tmp_path / "source_approval.docx"
+    output_path = tmp_path / "generated_approval.docx"
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "УТВЕРЖДЕНА Постановлением администрации от 20.02.2026 № 658-ПА"
+    document.save(source_path)
+
+    result = patch_docx(
+        input_path=source_path,
+        output_path=output_path,
+        changes={"cell_updates": [], "text_updates": [], "insert_objects": []},
+    )
+
+    generated = Document(output_path)
+    assert result["approval_header_normalized"] is True
+    assert generated.tables[0].cell(0, 0).text == "УТВЕРЖДЕНА Постановлением администрации от _______________ №__________"
+
+
 def test_patch_docx_updates_numeric_cell_and_preserves_source_file(tmp_path):
     source_path = tmp_path / "source.docx"
     output_path = tmp_path / "generated.docx"
@@ -87,7 +116,7 @@ def test_patch_docx_uses_visual_row_cells_for_merged_tables(tmp_path, monkeypatc
     )
 
     assert result["applied_count"] == 1
-    assert correct_cell.text == "17 898,18"
+    assert correct_cell.text == "17898,18"
     assert wrong_cell.text == "wrong"
     assert document.saved_path == str(output_path)
 
@@ -168,6 +197,76 @@ def test_patch_docx_inserts_new_object_rows_from_template(tmp_path):
     assert table.cell(3, 5).text == "100,00"
     assert table.cell(3, 6).text == "200,00"
     assert table.cell(4, 3).text == "Местный бюджет"
+
+
+def test_patch_docx_infers_inserted_row_responsible_from_next_row(tmp_path):
+    source_path = tmp_path / "source_responsible.docx"
+    output_path = tmp_path / "generated_responsible.docx"
+    document = Document()
+    table = document.add_table(rows=4, cols=8)
+    headers = ["N", "Наименование", "Период", "Источник", "Всего", "2026", "2027", "Исполнитель"]
+    for index, header in enumerate(headers):
+        table.cell(0, index).text = header
+
+    table.cell(1, 0).text = "1.1."
+    table.cell(1, 1).text = "Предыдущее мероприятие"
+    table.cell(1, 2).text = "2026-2027"
+    table.cell(1, 3).text = "Итого:"
+    table.cell(1, 7).text = "Предыдущий исполнитель"
+    table.cell(2, 0).text = "1.1."
+    table.cell(2, 1).text = "Предыдущее мероприятие"
+    table.cell(2, 2).text = "2026-2027"
+    table.cell(2, 3).text = "Местный бюджет"
+    table.cell(2, 7).text = "Предыдущий исполнитель"
+    table.cell(3, 0).text = "1.3."
+    table.cell(3, 1).text = "Следующее мероприятие"
+    table.cell(3, 2).text = "2026-2027"
+    table.cell(3, 3).text = "Местный бюджет"
+    table.cell(3, 7).text = "Управление молодежной политики"
+    document.save(source_path)
+
+    result = patch_docx(
+        input_path=source_path,
+        output_path=output_path,
+        changes={
+            "cell_updates": [],
+            "insert_objects": [
+                {
+                    "table_index": 0,
+                    "insert_after_row_index": 2,
+                    "template_row_index": 2,
+                    "display_number": "1.2",
+                    "object_name": "Мероприятие 01.02. Новое мероприятие",
+                    "execution_period": "2026-2027",
+                    "total_cell_index": 4,
+                    "year_cell_indices": {"2026": 5, "2027": 6},
+                    "rows": [
+                        {
+                            "source_type": "TOTAL",
+                            "source_label": "Итого:",
+                            "total_amount_rub": "150000.00",
+                            "amounts_by_year": {"2026": "150000.00", "2027": "0.00"},
+                            "unit": "thousand_rub",
+                        },
+                        {
+                            "source_type": "LOCAL_BUDGET",
+                            "source_label": "Местный бюджет",
+                            "total_amount_rub": "150000.00",
+                            "amounts_by_year": {"2026": "150000.00", "2027": "0.00"},
+                            "unit": "thousand_rub",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert result["inserted_count"] == 1
+    generated = Document(output_path)
+    table = generated.tables[0]
+    assert table.cell(3, 0).text == "1.2."
+    assert table.cell(3, 7).text == "Управление молодежной политики"
+    assert table.cell(4, 7).text == "Управление молодежной политики"
 
 
 def test_patch_docx_applies_text_updates(tmp_path):

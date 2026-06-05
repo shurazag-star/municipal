@@ -44,11 +44,27 @@ class AgentContextBuilder
   private
 
   def latest_document(document_type)
-    @organization.source_documents.where(document_type: document_type).order(updated_at: :desc).first
+    source_documents.where(document_type: document_type).order(updated_at: :desc, id: :desc).first
   end
 
   def active_program(program_document)
+    if employee_user? && program_document
+      program = program_for_document(program_document)
+      return program if program
+      return program_from_document(program_document)
+    end
+
     @organization.municipal_programs.includes(:current_version).order(updated_at: :desc).first || program_from_document(program_document)
+  end
+
+  def program_for_document(program_document)
+    return nil unless program_document
+
+    @organization.program_versions.includes(:municipal_program)
+      .where("program_versions.import_summary ->> 'source_document_id' = ?", program_document.id.to_s)
+      .order(:id)
+      .last
+      &.municipal_program
   end
 
   def program_from_document(program_document)
@@ -142,7 +158,7 @@ class AgentContextBuilder
   def change_sources_context
     documents = []
     documents << latest_document("xlsx_finance")
-    documents.concat(@organization.source_documents.pdf_agreement.order(updated_at: :desc).limit(10).to_a)
+    documents.concat(source_documents.pdf_agreement.order(updated_at: :desc, id: :desc).limit(10).to_a)
     documents.compact.uniq.map do |document|
       {
         "id" => document.id,
@@ -154,7 +170,7 @@ class AgentContextBuilder
   end
 
   def source_mode_context
-    resolver = SourceModeResolver.new(organization: @organization)
+    resolver = SourceModeResolver.new(organization: @organization, user: @user)
     resolver.summary.merge(
       "calculation_filenames" => resolver.calculation_documents.map(&:filename),
       "evidence_filenames" => resolver.evidence_documents.map(&:filename)
@@ -201,7 +217,12 @@ class AgentContextBuilder
   end
 
   def reconciliation_context
-    version = @organization.municipal_programs.includes(:current_version).order(updated_at: :desc).first&.current_version
+    version = if employee_user?
+      program_document = latest_document("docx_program")
+      program_for_document(program_document)&.current_version
+    else
+      @organization.municipal_programs.includes(:current_version).order(updated_at: :desc).first&.current_version
+    end
     return { "count" => 0, "items" => [] } unless version
 
     rows = Reconciliation.where(program_version: version)
@@ -250,5 +271,16 @@ class AgentContextBuilder
       .where.not(status: "rejected")
       .where.not(agent_resolution_status: "excluded")
       .any? { |item| FinancialNodeClassifier.summary_row?(item.program_node) }
+  end
+
+  def source_documents
+    @source_documents ||= begin
+      scope = @organization.source_documents
+      employee_user? ? scope.where(created_by: @user) : scope
+    end
+  end
+
+  def employee_user?
+    @user&.user?
   end
 end

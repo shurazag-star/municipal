@@ -34,6 +34,7 @@ class DocxPatchPlanBuilder
 
       add_execution_period_update(changes_by_cell, node)
     end
+    add_display_number_updates(changes_by_cell, nodes_by_id.values)
 
     changes_by_cell.values
   end
@@ -52,6 +53,7 @@ class DocxPatchPlanBuilder
       add_ancestors(ids, node)
     end
     add_related_summary_rows(ids)
+    add_related_duplicate_finance_rows(ids)
     ids
   end
 
@@ -79,6 +81,74 @@ class DocxPatchPlanBuilder
       target = FinancialNodeClassifier.summary_target_node(node)
       ids << node.id if target && ids.include?(target.id)
     end
+  end
+
+  def add_related_duplicate_finance_rows(ids)
+    return if ids.empty?
+
+    nodes = @target_program_version.program_nodes.includes(:funding_lines, :children).to_a
+    children_by_parent = nodes.group_by(&:parent_id)
+    duplicate_finance_row_authority_map(nodes, children_by_parent).each do |mirror_id, authority_id|
+      if ids.include?(authority_id) || ids.include?(mirror_id)
+        ids << authority_id
+        ids << mirror_id
+      end
+    end
+  end
+
+  def duplicate_finance_row_authority_map(nodes, children_by_parent)
+    duplicate_finance_row_groups(nodes).each_with_object({}) do |(_key, group), result|
+      next if group.size < 2
+
+      authority = duplicate_finance_row_authority(group, children_by_parent)
+      group.each do |node|
+        result[node.id] = authority.id unless node.id == authority.id
+      end
+    end
+  end
+
+  def duplicate_finance_row_groups(nodes)
+    nodes.select { |node| duplicate_finance_row_candidate?(node) }
+      .group_by { |node| duplicate_finance_row_key(node) }
+      .select { |_key, group| group.size > 1 }
+  end
+
+  def duplicate_finance_row_candidate?(node)
+    node.source_table_index.present? &&
+      node.source_row_index.present? &&
+      node.metadata.to_h["source"].to_s.start_with?("finance")
+  end
+
+  def duplicate_finance_row_key(node)
+    [
+      node.parent_id,
+      node.source_table_index,
+      normalize_display_number(node.display_number),
+      normalize_name(node.name)
+    ]
+  end
+
+  def duplicate_finance_row_authority(group, children_by_parent)
+    nodes_with_children = group.select do |node|
+      children_by_parent.fetch(node.id, []).any? { |child| !FinancialNodeClassifier.summary_row?(child) }
+    end
+    candidates = nodes_with_children.presence || group
+    candidates.max_by { |node| duplicate_finance_row_authority_score(node) }
+  end
+
+  def duplicate_finance_row_authority_score(node)
+    [
+      node.funding_lines.sum { |line| BigDecimal(line.amount_rub.to_s).abs },
+      -node.source_row_index.to_i
+    ]
+  end
+
+  def normalize_display_number(value)
+    value.to_s.strip.sub(/\.+\z/, "")
+  end
+
+  def normalize_name(value)
+    value.to_s.downcase.tr("ё", "е").gsub(/[^\p{Alnum}]+/, " ").squeeze(" ").strip
   end
 
   def add_self_and_ancestors(ids, node)
@@ -131,7 +201,7 @@ class DocxPatchPlanBuilder
       table_index: node.source_table_index,
       row_index: node.source_row_index,
       cell_index: total_cell_index,
-      amount: totals_by_year.values.sum(BigDecimal("0")),
+      amount: totals_by_year.values.sum(BigDecimal("0")) { |amount| document_display_amount(amount, metadata["docx_unit_in_document"]) },
       source_cell_raw_value: metadata["docx_total_raw_value"],
       unit: metadata["docx_unit_in_document"],
       reason: "node_total_column",
@@ -147,8 +217,9 @@ class DocxPatchPlanBuilder
       row_index = metadata["source_row_index"]
       next if [table_index, row_index].any?(&:blank?)
 
+      inferred_year_cells = inferred_year_cell_indices(lines)
       lines.each do |line|
-        cell_index = line.metadata&.dig("source_cell_index")
+        cell_index = line.metadata&.dig("source_cell_index") || inferred_year_cells[line.year.to_i]
         next if cell_index.blank?
 
         add_change(
@@ -173,7 +244,7 @@ class DocxPatchPlanBuilder
         table_index: table_index,
         row_index: row_index,
         cell_index: total_cell_index,
-        amount: lines.sum { |line| BigDecimal(line.amount_rub.to_s) },
+        amount: lines.sum { |line| document_display_amount(line.amount_rub, metadata["unit_in_document"]) },
         source_cell_raw_value: metadata["total_raw_value"],
         unit: metadata["unit_in_document"],
         change_item_id: change_item_id_for(node),
@@ -181,6 +252,24 @@ class DocxPatchPlanBuilder
         program_node_id: node.id
       )
     end
+  end
+
+  def inferred_year_cell_indices(lines)
+    explicit = lines.each_with_object({}) do |line, result|
+      cell_index = line.metadata&.dig("source_cell_index")
+      result[line.year.to_i] = cell_index.to_i if cell_index.present?
+    end
+    return explicit if explicit.empty?
+
+    base_year, base_cell = explicit.min_by { |year, _cell| year }
+    lines.each do |line|
+      year = line.year.to_i
+      next if explicit.key?(year)
+
+      candidate = base_cell + (year - base_year)
+      explicit[year] = candidate if candidate.positive?
+    end
+    explicit
   end
 
   def add_passport_total_updates(changes_by_cell)
@@ -296,6 +385,32 @@ class DocxPatchPlanBuilder
       reason: "execution_period",
       program_node_id: node.id
     )
+  end
+
+  def add_display_number_updates(changes_by_cell, nodes)
+    nodes.each do |node|
+      next unless node.metadata&.dig("docx_display_number_changed_from").present?
+      next if [node.source_table_index, node.source_row_index].any?(&:blank?)
+
+      add_text_change(
+        changes_by_cell,
+        table_index: node.source_table_index,
+        row_index: node.source_row_index,
+        cell_index: 0,
+        text: display_number_for_document(node),
+        reason: "display_number",
+        program_node_id: node.id
+      )
+    end
+  end
+
+  def display_number_for_document(node)
+    old_value = node.metadata&.dig("docx_display_number_changed_from").to_s
+    value = node.display_number.to_s
+    return "#{value}." if old_value.strip.end_with?(".") && value.present? && !value.end_with?(".")
+    return "#{value}." if value.match?(/\A\d+\.\d+\z/) && normalize_name(node.name).include?("мероприятие")
+
+    value
   end
 
   def add_change(changes_by_cell, table_index:, row_index:, cell_index:, amount:, source_cell_raw_value:, unit:, reason:, program_node_id:, change_item_id: nil)

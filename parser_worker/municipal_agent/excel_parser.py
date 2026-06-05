@@ -34,6 +34,9 @@ class ExcelFinanceRow:
 class ExcelObjectGroup:
     group_key: str
     status: str
+    parent_activity_code: str = ""
+    object_code: str = ""
+    object_name: str = ""
     rows: List[ExcelFinanceRow] = field(default_factory=list)
     funding: Dict[FundingKey, Decimal] = field(default_factory=dict)
     explicit_zero_target: bool = False
@@ -52,6 +55,7 @@ class ParsedExcelReport:
     program_totals: Dict[int, Decimal]
     final_totals: Dict[int, Decimal]
     object_groups: List[ExcelObjectGroup]
+    target_years: List[int] = field(default_factory=list)
 
     def total_without_double_count(self) -> Dict[int, Decimal]:
         if self.program_totals:
@@ -66,23 +70,61 @@ class ParsedExcelReport:
 def group_excel_object_rows(rows: Iterable[ExcelFinanceRow]) -> List[ExcelObjectGroup]:
     groups: Dict[str, ExcelObjectGroup] = {}
     for row in rows:
-        if row.row_type not in {ExcelRowType.OBJECT_LEAF_ROW, ExcelRowType.UNASSIGNED_RESIDUAL_ROW}:
+        identity = _group_identity(row)
+        if identity is None:
             continue
-        if row.row_type == ExcelRowType.UNASSIGNED_RESIDUAL_ROW:
-            group_key = f"UNASSIGNED_RESIDUAL::{row.parent_activity_code}::{row.row_number}"
-            status = "UNASSIGNED_RESIDUAL"
-        else:
-            object_identity = row.object_code.strip() or normalize_name(row.object_name)
-            group_key = "::".join([row.parent_activity_code.strip(), object_identity, normalize_name(row.object_name)])
-            status = "GROUPED_OBJECT"
 
-        group = groups.setdefault(group_key, ExcelObjectGroup(group_key=group_key, status=status))
+        group_key, status, object_code, object_name = identity
+        group = groups.setdefault(
+            group_key,
+            ExcelObjectGroup(
+                group_key=group_key,
+                status=status,
+                parent_activity_code=row.parent_activity_code.strip(),
+                object_code=object_code,
+                object_name=object_name,
+            ),
+        )
         group.rows.append(row)
         group.explicit_zero_target = group.explicit_zero_target or row.explicit_zero_target
         for key, amount in row.funding.items():
             group.funding[key] = quantize_rub(group.funding.get(key, Decimal("0")) + amount)
 
     return list(groups.values())
+
+
+def _group_identity(row: ExcelFinanceRow) -> Optional[Tuple[str, str, str, str]]:
+    if row.row_type == ExcelRowType.UNASSIGNED_RESIDUAL_ROW:
+        group_key = f"UNASSIGNED_RESIDUAL::{row.parent_activity_code}::{row.row_number}"
+        return group_key, "UNASSIGNED_RESIDUAL", row.object_code.strip(), row.object_name.strip()
+
+    if row.row_type == ExcelRowType.OBJECT_LEAF_ROW:
+        object_name = row.object_name.strip()
+        object_code = row.object_code.strip()
+        object_identity = object_code or normalize_name(object_name)
+        group_key = "::".join([row.parent_activity_code.strip(), object_identity, normalize_name(object_name)])
+        return group_key, "GROUPED_OBJECT", object_code, object_name
+
+    if row.row_type == ExcelRowType.ACTIVITY_AGGREGATE_ROW and _activity_total_row(row):
+        object_name = row.object_name.strip() or str(row.raw_values.get("Наименование") or "").strip()
+        object_code = row.parent_activity_code.strip()
+        object_identity = object_code or normalize_name(object_name)
+        group_key = "::".join([row.parent_activity_code.strip(), object_identity, normalize_name(object_name)])
+        return group_key, "ACTIVITY_AGGREGATE", object_code, object_name
+
+    return None
+
+
+def _activity_total_row(row: ExcelFinanceRow) -> bool:
+    return bool(row.parent_activity_code.strip()) and bool(row.funding) and not _kosgu_value_present(row.raw_values)
+
+
+def _kosgu_value_present(values: Mapping[str, object]) -> bool:
+    for header, value in values.items():
+        header_norm = header.lower().replace("ё", "е")
+        if "косгу" in header_norm and "суб" not in header_norm and not _blank(value):
+            return True
+    return False
 
 
 def parse_xlsx_finance_report(path: str | Path) -> ParsedExcelReport:
@@ -106,7 +148,7 @@ def parse_xlsx_finance_report(path: str | Path) -> ParsedExcelReport:
             row_type=row_type,
             parent_activity_code=normalized["measure_code"],
             object_code=normalized["object_code"],
-            object_name=normalized["object_name"],
+            object_name=normalized["object_name"] or (normalized["name"] if row_type == ExcelRowType.ACTIVITY_AGGREGATE_ROW else ""),
             funding=funding,
             raw_values=values,
             explicit_zero_target=row_type == ExcelRowType.OBJECT_LEAF_ROW and bool(amount_columns) and not funding,
@@ -123,6 +165,7 @@ def parse_xlsx_finance_report(path: str | Path) -> ParsedExcelReport:
         program_totals=program_totals,
         final_totals=final_totals,
         object_groups=group_excel_object_rows(rows),
+        target_years=sorted({year for year, _source, _row_source_required in amount_columns.values()}),
     )
 
 
@@ -264,6 +307,8 @@ def _detect_amount_columns(headers: Mapping[int, str], base_year: Optional[int] 
             columns[idx] = (current_year, None, False)
         elif (match or relative_match) and _looks_like_plan_total_header(text):
             columns[idx] = (current_year, None, True)
+        elif match and _looks_like_plain_year_total_header(text):
+            columns[idx] = (current_year, None, False)
         elif current_year is not None and source is not BudgetSource.UNKNOWN:
             columns[idx] = (current_year, source, False)
     return columns
@@ -281,6 +326,11 @@ def _infer_relative_plan_base_year(worksheet) -> Optional[int]:
 
 def _looks_like_plan_total_header(text: str) -> bool:
     return "план на" in text or re.search(r"\bплан\b", text)
+
+
+def _looks_like_plain_year_total_header(text: str) -> bool:
+    normalized = re.sub(r"[^0-9a-zа-я]+", " ", text.lower().replace("ё", "е")).strip()
+    return bool(re.fullmatch(r"20\d{2}(?: год(?:а)?)?", normalized))
 
 
 def _extract_funding(

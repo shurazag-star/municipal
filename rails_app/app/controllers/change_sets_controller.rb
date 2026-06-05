@@ -107,7 +107,7 @@ class ChangeSetsController < ApplicationController
       return
     end
 
-    redirect_to rails_blob_path(change_set.generated_docx_attachment, disposition: "attachment")
+    send_attachment(change_set.generated_docx_attachment)
   end
 
   def export_report
@@ -117,10 +117,25 @@ class ChangeSetsController < ApplicationController
       return
     end
 
-    redirect_to rails_blob_path(change_set.change_report_attachment, disposition: "attachment")
+    send_attachment(change_set.change_report_attachment)
   end
 
   private
+
+  def send_attachment(attachment)
+    blob = attachment.blob
+    send_data(
+      blob.download,
+      filename: blob.filename.to_s,
+      type: blob.content_type || "application/octet-stream",
+      disposition: "attachment"
+    )
+  rescue ActiveStorage::FileNotFoundError
+    redirect_back(
+      fallback_location: employee_user? ? employee_workspace_path : change_sets_path,
+      alert: "Файл выгрузки не найден в хранилище"
+    )
+  end
 
   def request_employee_draft_feedback!(change_set)
     conversation = AgentConversation.active_for!(

@@ -385,7 +385,8 @@ def _extract_finance_tree(
                     },
                 ),
             )
-            node_by_signature[signature] = stable_key
+            if node_type == "object":
+                node_by_signature[signature] = stable_key
             if node_type == "main_activity":
                 current_main_key = stable_key
                 current_activity_key = None
@@ -398,6 +399,13 @@ def _extract_finance_tree(
 
         node_key = node_by_signature.get(signature)
         if node_key is None:
+            source_row_parent_key = _finance_source_row_parent_key(
+                display_number,
+                name,
+                current_activity_key,
+                current_main_key,
+                subprogram_key,
+            )
             node_key = f"object:{table_index}:{row_index}:{_slug(display_number)}"
             _append_node(
                 parsed,
@@ -405,7 +413,7 @@ def _extract_finance_tree(
                 ParsedProgramNode(
                     stable_key=node_key,
                     node_type="object",
-                    parent_stable_key=current_activity_key or current_main_key or subprogram_key,
+                    parent_stable_key=source_row_parent_key,
                     display_number=display_number,
                     code=_extract_code(display_number, name),
                     name=name,
@@ -543,6 +551,22 @@ def _summary_row_uses_shifted_source(row: List[str]) -> bool:
     return "источник" in _normalize_name(source_candidate)
 
 
+def _finance_source_row_parent_key(
+    display_number: str,
+    name: str,
+    current_activity_key: Optional[str],
+    current_main_key: Optional[str],
+    subprogram_key: str,
+) -> str:
+    node_type = _classify_finance_node(display_number, name)
+    if node_type == "main_activity":
+        return subprogram_key
+    if node_type == "activity":
+        return current_main_key or subprogram_key
+
+    return current_activity_key or current_main_key or subprogram_key
+
+
 def _finance_year_columns(matrix: List[List[str]]) -> Dict[int, int]:
     result: Dict[int, int] = {}
     seen_years: set[int] = set()
@@ -550,7 +574,7 @@ def _finance_year_columns(matrix: List[List[str]]) -> Dict[int, int]:
         for col, cell in enumerate(row):
             if col < 5:
                 continue
-            match = re.search(r"\b(20\d{2})\b", _clean_cell(cell))
+            match = re.search(r"(?<!\d)(20\d{2})(?:\s*год)?(?!\d)", _clean_cell(cell).lower())
             if not match:
                 continue
             year = int(match.group(1))
@@ -624,7 +648,9 @@ def _extract_code(display_number: str, name: str) -> Optional[str]:
 
 def _is_total_source(text: str) -> bool:
     normalized = _normalize_name(text)
-    return normalized in {"итого", "всего"} or normalized.startswith("итого ")
+    marker = re.sub(r"[:;,.]+", " ", normalized)
+    marker = re.sub(r"\s+", " ", marker).strip()
+    return marker in {"итого", "всего"} or marker.startswith("итого ") or marker.startswith("всего ")
 
 
 def _subprogram_key(number: Optional[int]) -> str:

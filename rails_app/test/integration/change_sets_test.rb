@@ -102,6 +102,17 @@ class ChangeSetsTest < ActionDispatch::IntegrationTest
     assert_select "body", /Проект изменений применен/
     assert_select "a", "Скачать DOCX"
     assert_select "a", "Скачать отчет"
+
+    get export_docx_change_set_path(@change_set)
+    assert_response :success
+    assert_equal @change_set.generated_docx_attachment.download.b, @response.body.b
+    assert_includes @response.headers["Content-Disposition"], "attachment"
+    assert_includes @response.headers["Content-Type"], "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    get export_report_change_set_path(@change_set)
+    assert_response :success
+    assert_equal @change_set.change_report_attachment.download.b, @response.body.b
+    assert_includes @response.headers["Content-Disposition"], "attachment"
   end
 
   test "changeset table has horizontal scroll and readable column guards" do

@@ -364,6 +364,7 @@ class AgentWorkflowRunner
     decision = enforce_mismatch_intent(decision, content)
     decision = enforce_confirmation_mode(decision, content)
     decision = remove_generic_discrepancy_query(decision, content)
+    decision = apply_memory_source_mode(decision, content)
     return decision unless decision&.intent.in?(%w[explain_change validate_control_sums recheck_object recalculate_object explain_object_change])
 
     arguments = decision.arguments || {}
@@ -377,6 +378,30 @@ class AgentWorkflowRunner
     decision.class.new(
       intent: decision.intent,
       arguments: arguments.merge("object_query" => object_name),
+      confidence: decision.confidence,
+      source: decision.source,
+      error: decision.error
+    )
+  end
+
+  def apply_memory_source_mode(decision, content)
+    return decision unless decision&.intent.in?(%w[run_analysis create_change_set generate_docx validate_control_sums compare_sources])
+
+    arguments = decision.arguments || {}
+    return decision if arguments["source_mode"].present?
+
+    normalized = normalize_text(content)
+    return decision if normalized.match?(/автомат|сам.*опред/)
+
+    state = @conversation.working_state || {}
+    return decision unless state["last_source_mode_explicit"]
+
+    source_mode = SourceModeResolver.normalize(state["last_source_mode"])
+    return decision if source_mode.blank? || source_mode == "auto"
+
+    decision.class.new(
+      intent: decision.intent,
+      arguments: arguments.merge("source_mode" => source_mode),
       confidence: decision.confidence,
       source: decision.source,
       error: decision.error

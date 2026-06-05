@@ -185,6 +185,10 @@ class AgentIntentRouter
 
     return decision("unknown", arguments, "0.95", "fallback") if normalized.match?(/удали|стереть|очисти.*документ|без проверки|обойди|игнорируй/)
     return decision("approve_generated_version", arguments, "0.95", "fallback") if generated_approval_request?(normalized)
+    if full_document_generation_request?(normalized) && !manual_financial_change?(normalized, arguments)
+      return decision("generate_docx", arguments_without_object_query(arguments).merge(source_priority_arguments(normalized)), "0.92", "fallback")
+    end
+    return decision("choose_source_priority", arguments_without_object_query(arguments).merge(source_priority_arguments(normalized)), "0.93", "fallback") if automatic_source_mode_request?(normalized)
     return decision("choose_source_priority", arguments.merge(source_priority_arguments(normalized)), "0.93", "fallback") if normalized.match?(/(ручн|текстов).*(режим|ввод|чат|источник)/)
     return decision("confirm_change_items", arguments, "0.9", "fallback") if object_clarification_selection?(normalized, arguments)
     return decision("recalculate_object", arguments.merge("source_mode" => "manual_instruction"), "0.92", "fallback") if manual_financial_change?(normalized, arguments)
@@ -231,6 +235,10 @@ class AgentIntentRouter
 
     return decision("unknown", arguments, "0.95", "local_rules") if normalized.match?(/удали|стереть|очисти.*документ|без проверки|обойди|игнорируй/)
     return decision("approve_generated_version", arguments, "0.98", "local_rules") if generated_approval_request?(normalized)
+    if full_document_generation_request?(normalized) && !manual_financial_change?(normalized, arguments)
+      return decision("generate_docx", command_arguments.merge(source_priority_arguments(normalized)), "0.98", "local_rules")
+    end
+    return decision("choose_source_priority", command_arguments.merge(source_priority_arguments(normalized)), "0.98", "local_rules") if automatic_source_mode_request?(normalized)
     if generic_change_request?(normalized)
       if change_sources_loaded?(context)
         return decision("generate_docx", command_arguments, "0.95", "local_rules")
@@ -263,6 +271,12 @@ class AgentIntentRouter
     normalized.match?(/\b(внеси|внесите|внести|примени|применить|сделай|сделать)\b.*\bизменен/)
   end
 
+  def full_document_generation_request?(normalized)
+    generation = normalized.match?(/(сформир|подготов|выгруз|созда|сделай).*(нов.*редакц|docx|докс|word|ворд|документ|отчет)|нов.*редакц/)
+    document_context = normalized.match?(/проанализ|анализ|сопостав|пересчит|свер|файл|документ|excel|эксел|xlsx|word|ворд|docx|докс|редакц/)
+    generation && document_context
+  end
+
   def change_sources_loaded?(context)
     context_hash = context.respond_to?(:to_h) ? context.to_h : {}
     sources = context_hash["change_sources"] || context_hash[:change_sources]
@@ -280,6 +294,8 @@ class AgentIntentRouter
   end
 
   def source_priority_arguments(normalized)
+    return { "source_mode" => "auto" } if automatic_source_mode_request?(normalized)
+
     excel = normalized.match?(/excel|эксел|xlsx/)
     pdf = normalized.match?(/pdf|пдф/)
     manual = normalized.match?(/ручн|текстов|из\s+чата|без\s+файл/)
@@ -302,6 +318,10 @@ class AgentIntentRouter
     else
       {}
     end
+  end
+
+  def automatic_source_mode_request?(normalized)
+    normalized.match?(/по умолч.*автомат|автомат.*(режим|источник|метод|пересчет|расчет)|режим.*автомат|сам.*опред.*(режим|источник|метод|пересчет|расчет)|определи.*(режим|источник|метод).*сам/)
   end
 
   def generated_approval_request?(normalized)
@@ -399,7 +419,7 @@ class AgentIntentRouter
   def generic_object_query?(query)
     normalized = normalize_text(query)
     normalized.blank? ||
-      normalized.match?(/\b(программ|бюджет|модел|поряд|основан|норматив|баз|анализ|пересчит|используй|целев|финансов|документ|файл|соглашен|соглашение|строк|ручн|провер|редакц|docx|word|pdf|excel|xlsx)\b/)
+      normalized.match?(/\b(программ|бюджет|модел|поряд|основан|норматив|баз|анализ|пересчит|используй|целев|финансов|документ|документы|файл|файлы|соглашен|соглашение|строк|ручн|провер|редакц|docx|word|pdf|excel|xlsx)\b/)
   end
 
   def pronoun_reference?(value)
@@ -470,7 +490,7 @@ class AgentIntentRouter
   def stop_words
     @stop_words ||= %w[
       почему покажи какие строк требуют ручной проверки проверку сумма стала стало больше меньше поменялось
-      подготовь отчет выгрузи новую редакцию сформируй проанализируй изменения документы
+      подготовь отчет выгрузи новую редакцию сформируй проанализируй изменения документы загруженные текущую текущей все файлы суммы
       пересчитай проверь перепроверь объект объекту позицию позиции нему ней нем поставь установи измени увеличь уменьши
       внеси внесите внести примени применить сделай сделать программа программу бюджет целевую финансовую модель порядок основание файл документ соглашение
     ].flat_map { |words| words.split(/\s+/) }.to_set

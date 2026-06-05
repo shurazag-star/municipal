@@ -121,6 +121,36 @@ class EmployeeWorkspaceTest < ActionDispatch::IntegrationTest
     assert_no_match(/Разобран|Разбирается|Ошибка|failed|queued|parsed/, side_panel_text)
   end
 
+  test "employee workspace does not show admin uploaded files from same organization" do
+    admin = User.create!(
+      organization: @organization,
+      email: "employee-admin-source@example.com",
+      password: "password123",
+      role: "admin"
+    )
+    SourceDocument.create!(
+      organization: @organization,
+      created_by: admin,
+      document_type: "xlsx_finance",
+      filename: "Старый админский Excel.xlsx",
+      status: "parsed"
+    )
+    SourceDocument.create!(
+      organization: @organization,
+      created_by: @employee,
+      document_type: "xlsx_finance",
+      filename: "Excel работника.xlsx",
+      status: "parsed"
+    )
+
+    post session_path, params: { email: "11@11", password: "1111" }
+    follow_redirect!
+
+    side_panel_text = css_select(".employee-side-panel").map(&:text).join(" ")
+    assert_match(/Excel работника\.xlsx/, side_panel_text)
+    assert_no_match(/Старый админский Excel\.xlsx/, side_panel_text)
+  end
+
   test "employee workspace keeps chat scroll internal and shows delete controls" do
     procedure = SourceDocument.create!(
       organization: @organization,

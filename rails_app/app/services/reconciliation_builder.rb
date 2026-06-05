@@ -41,11 +41,14 @@ class ReconciliationBuilder
   private
 
   def latest_parsed(document_type)
-    @organization.source_documents.where(document_type: document_type, status: "parsed").order(updated_at: :desc).first
+    source_documents.where(document_type: document_type, status: "parsed").order(updated_at: :desc, id: :desc).first
   end
 
   def ensure_program_version!
     docx = latest_parsed("docx_program")
+    version = program_version_for_document(docx)
+    return version if version
+
     parsed_program = docx&.parsed_payload&.fetch("program", {}) || {}
     program_name = parsed_program["name"].presence || "Название не определено"
     start_year = parsed_program["period_start_year"].presence || 2026
@@ -65,5 +68,21 @@ class ReconciliationBuilder
       program.program_versions.create!(created_by: @user, version_number: 1, status: "imported")
     program.update!(current_version: version) unless program.current_version_id == version.id
     version
+  end
+
+  def program_version_for_document(docx)
+    return nil unless docx
+
+    @organization.program_versions
+      .where("program_versions.import_summary ->> 'source_document_id' = ?", docx.id.to_s)
+      .order(:id)
+      .last
+  end
+
+  def source_documents
+    scope = @organization.source_documents
+    return scope unless @user&.user?
+
+    scope.where(created_by: @user)
   end
 end

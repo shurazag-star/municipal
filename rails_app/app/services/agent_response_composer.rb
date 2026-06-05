@@ -157,10 +157,23 @@ class AgentResponseComposer
           ].compact.join("\n\n"))
         end
       else
-        base("Я проанализировал документы. Изменений по суммам не нашел, поэтому проект изменений не создан.")
+        diagnostics = @tool_result["diagnostics"] || {}
+        if diagnostics["source_document_type"] == "xlsx_finance" && diagnostics["object_groups_count"].to_i.zero?
+          if diagnostics["program_totals_count"].to_i.zero?
+            base("Я проанализировал документы, но проект изменений не создан: Excel-файл вижу, однако в нем не удалось выделить годовые суммы и строки мероприятий или объектов для сопоставления с Word-документом. Это ошибка разбора структуры Excel, а не отсутствие изменений.")
+          else
+            base("Я проанализировал документы, но проект изменений не создан: контрольные суммы Excel прочитаны, а строки мероприятий или объектов для сопоставления с Word-документом не выделены. Нужно уточнить структуру Excel-разбора, иначе новая редакция будет неполной.")
+          end
+        elsif diagnostics["matched_count"].to_i.zero? && (diagnostics["unmatched_count"].to_i.positive? || diagnostics["object_groups_count"].to_i.positive?)
+          base("Я проанализировал документы, но проект изменений не создан: строки Excel выделены, однако не сопоставились со строками Word-документа. Это проблема сопоставления, а не подтверждение отсутствия изменений.")
+        else
+          base("Я проанализировал документы. Изменений по суммам не нашел, поэтому проект изменений не создан.")
+        end
       end
     when "blocked"
       base("Для анализа не хватает: #{Array(@tool_result['missing']).join(', ')}. Загрузите эти документы, и я подготовлю проект изменений.")
+    when "needs_clarification"
+      base(@tool_result["clarification_question"].presence || "Нужно уточнить, с какой редакцией продолжить работу.")
     when "failed"
       base("Анализ не выполнен: #{@tool_result['error']}")
     else
@@ -267,6 +280,7 @@ class AgentResponseComposer
     return base("Проект изменений пока не создан. Сначала нужно провести анализ загруженных документов.") if @tool_result["status"] == "empty"
     return base("Для проверки нужен конкретный объект.") if @tool_result["status"] == "blocked"
     return base(@tool_result["clarification_question"].presence || "Нужно уточнение для безопасного пересчета.") if @tool_result["status"] == "needs_clarification"
+    return manual_batch_change_response if @tool_result["manual_batch_status"].present?
     return manual_object_change_response if @tool_result["manual_change_status"].present?
 
     items = Array(@tool_result["items"])
@@ -312,6 +326,34 @@ class AgentResponseComposer
     first_error = Array(@tool_result["validation_errors"]).first
     message = first_error&.fetch("message", nil) || Array(@tool_result["missing"]).join(", ").presence || @tool_result["error"]
     base("Изменение по объекту не выпущено в финальную редакцию: #{message}.")
+  end
+
+  def manual_batch_change_response
+    if @tool_result["status"] == "completed"
+      cards = download_cards(@tool_result["download_links"]) + action_cards(@tool_result["approval_actions"])
+      details = [
+        ("обновлено строк сумм: #{@tool_result['amount_update_items_count']}" if @tool_result["amount_update_items_count"].to_i.positive?),
+        ("добавлено строк по новому мероприятию: #{@tool_result['new_object_items_count']}" if @tool_result["new_object_items_count"].to_i.positive?),
+        ("обновлено ячеек в Word-документе: #{@tool_result['docx_updated_cells']}" if @tool_result["docx_updated_cells"].to_i.positive?),
+        ("вставлено новых объектов: #{@tool_result['docx_inserted_objects']}" if @tool_result["docx_inserted_objects"].to_i.positive?)
+      ].compact.join("; ")
+      checks = Array(@tool_result["checks"]).presence || ["документ прошел проверку"]
+      return base(
+        [
+          "Я применил пакет ручных изменений и сформировал проверенный черновик новой редакции.",
+          details.present? ? "Что изменено: #{details}." : nil,
+          "Проверки: #{checks.join('; ')}.",
+          "Чтобы использовать его дальше, утвердите редакцию."
+        ].compact.join("\n\n"),
+        cards: cards
+      )
+    end
+
+    message = @tool_result["clarification_question"].presence ||
+      Array(@tool_result["missing"]).join(", ").presence ||
+      @tool_result["error"].presence ||
+      "нужно уточнение для безопасного ручного пересчета"
+    base("Пакет ручных изменений пока не выпущен в финальную редакцию: #{message}.")
   end
 
   def generated_documents_response

@@ -139,6 +139,7 @@ class ChangeSetBuilder
 
   def create_absent_excel_zeroing_items!(change_set)
     return unless excel_target_mode?
+    return unless excel_absent_zeroing_enabled?
 
     source_document = primary_excel_source_document
     return unless source_document
@@ -152,6 +153,8 @@ class ChangeSetBuilder
       next if matched_node_ids.include?(node.id)
 
       existing_funding_keys(node).each do |year, source_type|
+        next unless excel_target_year_in_scope?(year)
+
         old_amount = current_amount(node, year, source_type)
         next if old_amount.abs <= @tolerance
 
@@ -216,11 +219,17 @@ class ChangeSetBuilder
 
   def target_state_entries(match_result)
     entries = match_result.funding_entries.map(&:dup)
+    if match_result.external_group["explicit_zero_target"].present?
+      entries = zeroing_entries_for_existing_funding(match_result, explicit_zero_target: true)
+      return entries
+    end
     return entries unless match_result.source_document&.xlsx_finance? && match_result.program_node.present?
+    return entries unless excel_absent_zeroing_enabled?
 
     target_keys = entries.map { |entry| funding_key(entry.fetch("year"), entry.fetch("source_type")) }.to_set
     existing_funding_keys(match_result.program_node).each do |year, source_type|
       next if target_keys.include?(funding_key(year, source_type))
+      next unless excel_target_year_in_scope?(year)
 
       old_amount = current_amount(match_result.program_node, year, source_type)
       next if old_amount.abs <= @tolerance
@@ -235,6 +244,33 @@ class ChangeSetBuilder
 	      }
     end
     entries
+  end
+
+  def zeroing_entries_for_existing_funding(match_result, explicit_zero_target:)
+    return [] unless match_result.source_document&.xlsx_finance? && match_result.program_node.present?
+
+    existing_funding_keys(match_result.program_node).filter_map do |year, source_type|
+      next unless excel_target_year_in_scope?(year)
+
+      old_amount = current_amount(match_result.program_node, year, source_type)
+      next if old_amount.abs <= @tolerance
+
+      {
+        "year" => year,
+        "source_type" => source_type,
+        "amount_rub" => BigDecimal("0"),
+        "amount_mode" => "zeroing",
+        "explicit_zero_target" => explicit_zero_target,
+        "target_model_absent_in_excel" => false
+      }
+    end
+  end
+
+  def excel_absent_zeroing_enabled?
+    return true if SourceModeResolver.xlsx_target_mode?(@analysis_session.effective_source_mode)
+
+    value = @organization.settings.to_h["excel_target_zero_absent"]
+    value == true || value.to_s == "true" || value.to_s == "1"
   end
 
   def existing_funding_keys(program_node)
@@ -286,6 +322,37 @@ class ChangeSetBuilder
 
   def primary_excel_source_document
     @match_results.map(&:source_document).compact.detect(&:xlsx_finance?)
+  end
+
+  def excel_target_year_in_scope?(year)
+    years = external_target_years
+    years.blank? || years.include?(year.to_i)
+  end
+
+  def external_target_years
+    @external_target_years ||= begin
+      document = primary_excel_source_document
+      payload = document&.parsed_payload || {}
+      years = Array(payload["target_years"]).map(&:to_i)
+      years += payload_years(payload["program_totals"])
+      years += payload_years(payload["final_totals"])
+      years += Array(payload["object_groups"]).flat_map { |group| funding_years(group["funding"]) }
+      years += @match_results
+        .select { |result| result.source_document&.xlsx_finance? }
+        .flat_map { |result| Array(result.funding_entries).map { |entry| entry["year"].to_i } }
+      years.reject(&:zero?).to_set
+    end
+  end
+
+  def payload_years(raw)
+    raw.to_h.keys.map(&:to_i).reject(&:zero?)
+  end
+
+  def funding_years(raw)
+    raw.to_h.keys.filter_map do |key|
+      year = key.to_s.split("::", 2).first.to_i
+      year unless year.zero?
+    end
   end
 
   def excel_target_mode?
