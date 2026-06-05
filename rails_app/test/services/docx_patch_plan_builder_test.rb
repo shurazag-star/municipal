@@ -197,6 +197,66 @@ class DocxPatchPlanBuilderTest < ActiveSupport::TestCase
     assert_equal BigDecimal("300000.00"), BigDecimal(line_total.fetch("amount_rub"))
   end
 
+  test "keeps concrete source row value when synthetic zero shares the same DOCX cell" do
+    node = @version.program_nodes.create!(
+      node_type: "object",
+      name: "Основное мероприятие 02",
+      source_table_index: 7,
+      source_row_index: 13
+    )
+    node.funding_lines.create!(
+      year: 2027,
+      source_type: "LOCAL_BUDGET",
+      amount_rub: "1000000.00",
+      metadata: {
+        "source_table_index" => 7,
+        "source_row_index" => 13,
+        "source_cell_index" => 23,
+        "raw_value" => "1 000,00",
+        "total_cell_index" => 4,
+        "total_raw_value" => "1 000,00",
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    node.funding_lines.create!(
+      year: 2027,
+      source_type: "OTHER_SOURCE",
+      amount_rub: "0.00",
+      metadata: {
+        "source_table_index" => 7,
+        "source_row_index" => 13,
+        "source_cell_index" => 23,
+        "total_cell_index" => 4,
+        "total_raw_value" => "1 000,00",
+        "unit_in_document" => "thousand_rub"
+      }
+    )
+    item = ChangeItem.new(program_node_id: node.id)
+
+    updates = DocxPatchPlanBuilder.new(
+      target_program_version: @version,
+      amount_items: [item],
+      new_object_result: {},
+      node_map: { node.id => node }
+    ).cell_updates
+
+    year_update = updates.detect do |update|
+      update["reason"] == "funding_line_year" &&
+        update["table_index"] == 7 &&
+        update["row_index"] == 13 &&
+        update["cell_index"] == 23
+    end
+    total_update = updates.detect do |update|
+      update["reason"] == "funding_line_total_column" &&
+        update["table_index"] == 7 &&
+        update["row_index"] == 13 &&
+        update["cell_index"] == 4
+    end
+
+    assert_equal BigDecimal("1000000.00"), BigDecimal(year_update.fetch("amount_rub"))
+    assert_equal BigDecimal("1000000.00"), BigDecimal(total_update.fetch("amount_rub"))
+  end
+
   test "infers missing funding year cell from adjacent years in the same row" do
     node = @version.program_nodes.create!(
       node_type: "object",

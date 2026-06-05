@@ -417,7 +417,7 @@ class DocxPatchPlanBuilder
     return if [table_index, row_index, cell_index].any?(&:blank?)
 
     key = [table_index.to_i, row_index.to_i, cell_index.to_i]
-    changes_by_cell[key] = {
+    change = {
       "change_item_id" => change_item_id,
       "table_index" => key[0],
       "row_index" => key[1],
@@ -428,6 +428,26 @@ class DocxPatchPlanBuilder
       "reason" => reason,
       "program_node_id" => program_node_id
     }.compact
+    existing = changes_by_cell[key]
+    changes_by_cell[key] = preferred_cell_change(existing, change)
+  end
+
+  def preferred_cell_change(existing, candidate)
+    return candidate if existing.blank?
+
+    existing_raw = existing["source_cell_raw_value"].present?
+    candidate_raw = candidate["source_cell_raw_value"].present?
+    return candidate if candidate_raw && !existing_raw
+    return existing if existing_raw && !candidate_raw
+
+    existing_amount = BigDecimal(existing["amount_rub"].to_s)
+    candidate_amount = BigDecimal(candidate["amount_rub"].to_s)
+    return candidate if existing_amount.zero? && !candidate_amount.zero?
+    return existing if !existing_amount.zero? && candidate_amount.zero?
+
+    candidate
+  rescue ArgumentError
+    candidate
   end
 
   def add_text_change(changes_by_cell, table_index:, row_index:, cell_index:, text:, reason:, program_node_id:)
