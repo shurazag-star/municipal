@@ -389,6 +389,41 @@ class AgentAutonomousResolverTest < ActiveSupport::TestCase
     assert_match(/финансов/i, item.agent_resolution_reason)
   end
 
+  test "resolves amount updates mapped to matched Excel activity aggregates" do
+    activity = @version.program_nodes.create!(
+      node_type: "activity",
+      code: "05.03",
+      display_number: "5.3",
+      name: "Мероприятие 05.03. Утверждение программ комплексного развития систем коммунальной инфраструктуры"
+    )
+    item = @change_set.change_items.create!(
+      program_node: activity,
+      change_type: "amount_update",
+      status: "draft",
+      field_name: "amount_rub",
+      year: 2027,
+      source_type: "LOCAL_BUDGET",
+      old_amount_rub: "0",
+      new_amount_rub: "1000000.00",
+      delta_rub: "1000000.00",
+      source_reference: {
+        "document_type" => "xlsx_finance",
+        "group_status" => "ACTIVITY_AGGREGATE",
+        "match_status" => "MATCH_ACTIVITY_AGGREGATE",
+        "parent_activity_code" => "103050300000000",
+        "object_code" => "103050300000000",
+        "object_name" => "Утверждение программ комплексного развития систем коммунальной инфраструктуры"
+      },
+      confidence: "1.0"
+    )
+
+    AgentAutonomousResolver.new(change_set: @change_set, user: @user).resolve!
+
+    assert_equal "resolved", item.reload.agent_resolution_status
+    assert_equal "confirmed", item.status
+    assert_equal "existing_activity_aggregate", item.agent_resolution_evidence["resolution_pass"]
+  end
+
   test "blocks amount updates mapped to summary total rows" do
     total_node = @version.program_nodes.create!(
       node_type: "object",

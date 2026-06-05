@@ -84,7 +84,9 @@ class AgentAutonomousResolver
   def resolve_existing_node!(item)
     reference = item.source_reference || {}
     return clarify_item!(item, "В источниках есть конфликт, который нельзя применить без правила приоритета.") if reference["source_conflict"].present?
-    return clarify_item!(item, "Изменение не привязано к финансовой строке объекта или остатка программы.") unless financial_target_node?(item.program_node)
+    unless financial_target_node?(item.program_node) || matched_activity_aggregate_target?(item)
+      return clarify_item!(item, "Изменение не привязано к финансовой строке объекта или остатка программы.")
+    end
     return clarify_item!(item, "Не удалось определить год или источник финансирования.") if item.year.blank? || item.source_type.blank?
     return exclude_item!(item, "Сумма не меняется после сравнения с текущей программой.") if BigDecimal(item.delta_rub.to_s).zero?
 
@@ -94,7 +96,7 @@ class AgentAutonomousResolver
       requires_user_confirmation: false,
       agent_resolution_status: "resolved",
       agent_resolution_reason: "Объект найден в текущей программе; год, источник и сумма подтверждены документом-основанием.",
-      agent_resolution_evidence: evidence_for(item).merge("resolution_pass" => "existing_program_node"),
+      agent_resolution_evidence: evidence_for(item).merge("resolution_pass" => resolution_pass_for_existing_node(item)),
       agent_resolver_model: "rails-autonomous-resolver",
       agent_resolved_at: Time.current
     )
@@ -167,6 +169,18 @@ class AgentAutonomousResolver
 
   def financial_target_node?(node)
     FinancialNodeClassifier.concrete_financial_node?(node)
+  end
+
+  def matched_activity_aggregate_target?(item)
+    reference = item.source_reference || {}
+    item.program_node&.node_type == "activity" &&
+      reference["document_type"].to_s == "xlsx_finance" &&
+      reference["group_status"].to_s == "ACTIVITY_AGGREGATE" &&
+      reference["match_status"].to_s == "MATCH_ACTIVITY_AGGREGATE"
+  end
+
+  def resolution_pass_for_existing_node(item)
+    matched_activity_aggregate_target?(item) ? "existing_activity_aggregate" : "existing_program_node"
   end
 
   def unsafe_external_new_object?(item)
