@@ -199,6 +199,62 @@ class ExternalSourceMatcherTest < ActiveSupport::TestCase
     assert_equal "MATCH_FUZZY_CONFIDENT", result.match_status
   end
 
+  test "matches coded Excel activity aggregate to existing activity node" do
+    subprogram = @version.program_nodes.create!(
+      node_type: "subprogram",
+      name: "Подпрограмма 5",
+      display_number: "5"
+    )
+    activity = @version.program_nodes.create!(
+      parent: subprogram,
+      node_type: "activity",
+      code: "05.03",
+      display_number: "5.3",
+      name: "Мероприятие 05.03. Утверждение программ комплексного развития систем коммунальной инфраструктуры",
+      normalized_name: "мероприятие 05 03 утверждение программ комплексного развития систем коммунальной инфраструктуры"
+    )
+    document = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "object_groups" => [
+          {
+            "group_key" => "135050300000000::135050300000000::утверждение программ комплексного развития систем коммунальной инфраструктуры муниципальных образований",
+            "status" => "ACTIVITY_AGGREGATE",
+            "parent_activity_code" => "135050300000000",
+            "object_code" => "135050300000000",
+            "object_name" => "Утверждение программ комплексного развития систем коммунальной инфраструктуры муниципальных образований",
+            "funding" => { "2027::LOCAL_BUDGET" => "1000000.00" },
+            "rows" => [
+              {
+                "row_number" => 278,
+                "row_type" => "ACTIVITY_AGGREGATE_ROW",
+                "parent_activity_code" => "135050300000000",
+                "object_code" => "135050300000000",
+                "object_name" => "Утверждение программ комплексного развития систем коммунальной инфраструктуры муниципальных образований",
+                "funding" => { "2027::LOCAL_BUDGET" => "1000000.00" }
+              }
+            ]
+          }
+        ]
+      }
+    )
+    session = analysis_session!(document)
+
+    result = ExternalSourceMatcher.new(
+      analysis_session: session,
+      source_document: document,
+      semantic_agent: RaisingSemanticAgent.new
+    ).match!.first
+
+    assert_equal activity, result.program_node
+    assert_equal "MATCH_ACTIVITY_AGGREGATE", result.match_status
+    assert_not result.requires_user_confirmation
+  end
+
   test "matches residual Excel row to existing parent activity when amount is already present" do
     subprogram = @version.program_nodes.create!(
       node_type: "subprogram",

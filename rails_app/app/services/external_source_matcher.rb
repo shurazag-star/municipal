@@ -219,6 +219,15 @@ class ExternalSourceMatcher
       )
     end
 
+    activity_aggregate_match = find_existing_activity_aggregate_match(group)
+    if activity_aggregate_match
+      return exact_match(
+        activity_aggregate_match,
+        "MATCH_ACTIVITY_AGGREGATE",
+        "Агрегатная строка Excel сопоставлена с существующим мероприятием"
+      )
+    end
+
     residual_match = find_residual_program_node(group)
     if residual_match
       return exact_match(
@@ -284,6 +293,36 @@ class ExternalSourceMatcher
     return matches.first if matches.one?
 
     nil
+  end
+
+  def find_existing_activity_aggregate_match(group)
+    return nil unless @source_document.xlsx_finance?
+    return nil unless group["status"].to_s == "ACTIVITY_AGGREGATE"
+
+    parsed = parse_external_parent_code(group["parent_activity_code"].presence || group["group_key"])
+    return nil unless parsed
+
+    candidates = @program_version.program_nodes
+      .where(node_type: "activity")
+      .to_a
+      .reject { |node| FinancialNodeClassifier.summary_row?(node) }
+      .select { |node| parent_activity_matches?(node, parsed) }
+    return candidates.first if candidates.one?
+
+    named = candidates.select { |node| activity_aggregate_name_matches?(node, group) }
+    return named.first if named.one?
+
+    nil
+  end
+
+  def activity_aggregate_name_matches?(node, group)
+    expected = normalize_activity_aggregate_name(group["object_name"])
+    actual = normalize_activity_aggregate_name(node.name)
+    expected.present? && actual.present? && (actual.include?(expected) || expected.include?(actual))
+  end
+
+  def normalize_activity_aggregate_name(value)
+    normalize_name(value.to_s.sub(/\A\s*Мероприятие\s+\d{2}\.\d{2}\.?\s*/i, ""))
   end
 
   def parent_activity_matches?(node, parsed)
