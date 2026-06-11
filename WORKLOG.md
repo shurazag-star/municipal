@@ -5862,3 +5862,86 @@
 ### Риски и замечания
 
 - Требуется финальный deploy этой корректировки и повторный production smoke по Шатуре.
+
+## 2026-06-11 10:25:43 MSK — Shatura production final verification
+
+### Выполнено
+
+- Задеплоена финальная версия с self-healing для stale `РЕЙТИНГ` payload:
+  - промежуточный deploy `Resolve Shatura Excel residual matches`:
+    - `municipal-web` deployment `ea397b69-b964-49ab-8e7a-9befb4fec2c8` — `SUCCESS`;
+    - `municipal-worker` deployment `369c5470-5029-44bd-805c-5e9c76b08ea7` — `SUCCESS`;
+  - финальный deploy:
+    - `municipal-web` deployment `77985a87-c62d-4c1f-a03d-5d432b11c6d9` — `SUCCESS`;
+    - `municipal-worker` deployment `ae2fb291-7392-48ed-b848-eb980a3ed925` — `SUCCESS`.
+- Production healthcheck:
+  - `curl https://municipal-web-production.up.railway.app/up` -> `ok`.
+- Через worker login Шатуры выполнен сценарий `все загрузил, разбери все файлы`.
+- Результат анализа:
+  - создан `ChangeSet #51`;
+  - `64` строки;
+  - `64` сопоставлено;
+  - `0` исключено;
+  - `0` уточнений;
+  - режим `xlsx_target`;
+  - `РЕЙТИНГ` не попал в object groups;
+  - `Пышлицы` сопоставились с существующим объектом.
+- Через worker login Шатуры выполнено формирование финальной Word-редакции по проекту #51.
+
+### Production-результат
+
+- `ChangeSet #51`:
+  - `status=applied`;
+  - `export_ready=true`;
+  - `items=64`;
+  - `resolved=64`;
+  - `needs_clarification=0`;
+  - `excluded=0`;
+  - `manual_insert_required_count=0`.
+- Вложения:
+  - DOCX attached: `changeset-51-version-2.docx`;
+  - report attached: `changeset-51-report.html`.
+- Проверки экспорта:
+  - `post_export_validation=valid`;
+  - `agent_self_check=passed`;
+  - `independent_verifier=passed`;
+  - docx patch applied `729` values;
+  - inserted `1` new object.
+- Excel #88 после self-healing:
+  - `target_years=[2026]`;
+  - `object_groups=46`;
+  - `funding_cells=64`;
+  - `rating_groups=0`.
+
+### Люберцы
+
+- Выполнена только read-only проверка production счетчиков:
+  - organization `Городской округ Люберцы`;
+  - `docs=3`;
+  - `programs=1`;
+  - `versions=2`;
+  - `sessions=1`;
+  - `change_sets=1`;
+  - `last_change_set=44`.
+- Люберецкий чат, документы и анализ не запускались.
+
+### Измененные файлы
+
+- `WORKLOG.md`
+
+### Проверки
+
+- Production Shatura worker login и chat flow через HTTP/curl.
+- Production Rails runner read-only через `railway ssh`.
+- Production Railway deployment status через Railway CLI.
+
+### Запуски и процессы
+
+- Локальных серверов после финальной проверки не запускалось.
+- Долгих локальных процессов не оставлено; ранее поднятые Docker Compose контейнеры остановлены.
+
+### Результат
+
+- Шатурский агент сформировал проверенный черновик новой редакции DOCX и отчет.
+- Исходная проблема `строки Excel выделены, но не сопоставились с Word` устранена.
+- Люберцы не затрагивались.
