@@ -372,4 +372,27 @@ class AgentResponseComposerTest < ActiveSupport::TestCase
     assert_match(/ошибка разбора структуры Excel/i, content)
     assert_no_match(/Изменений по суммам не нашел/i, content)
   end
+
+  test "analysis zero-result response diagnoses Excel year headers without funding" do
+    response = AgentResponseComposer.new(
+      organization: @organization,
+      user: @user,
+      intent: "run_analysis",
+      tool_result: {
+        "status" => "completed",
+        "change_project_id" => nil,
+        "diagnostics" => {
+          "source_document_type" => "xlsx_finance",
+          "object_groups_count" => 38,
+          "target_years_count" => 0,
+          "funding_entries_count" => 0,
+          "program_totals_count" => 0
+        }
+      }
+    ).compose
+
+    content = response.fetch("content")
+    assert_match(/годовые колонки и суммы финансирования не распознаны/i, content)
+    assert_no_match(/не сопоставились со строками Word/i, content)
+  end
 end

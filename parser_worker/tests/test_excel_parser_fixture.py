@@ -184,6 +184,82 @@ def test_excel_parser_supports_relative_budget_roster_plan_years(tmp_path):
     assert group.funding[(2028, BudgetSource.REGIONAL_BUDGET)] == Decimal("500000.00")
 
 
+def test_excel_parser_keeps_separate_year_header_row_before_numbering(tmp_path):
+    path = tmp_path / "separate_year_headers.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Результат"
+    ws.merge_cells("B8:M8")
+    ws.merge_cells("N8:O8")
+    ws.merge_cells("P8:Q8")
+    ws.merge_cells("R8:S8")
+    ws.merge_cells("T8:U8")
+    ws.merge_cells("V9:X9")
+    ws.merge_cells("Y9:AA9")
+    ws.merge_cells("AB9:AD9")
+    ws["B8"] = "Наименование"
+    ws["N8"] = "ЦСР"
+    ws["P8"] = "Тип средств"
+    ws["R8"] = "Мероприятие"
+    ws["T8"] = "Объект"
+    ws["V9"] = 2026
+    ws["Y9"] = 2027
+    ws["AB9"] = 2028
+    for start in ("V", "Y", "AB"):
+        ws[f"{start}10"] = "Всего"
+    ws["W10"] = "Средства бюджета субъекта РФ"
+    ws["X10"] = "Средства бюджета муниципального округа"
+    ws["Z10"] = "Средства бюджета субъекта РФ"
+    ws["AA10"] = "Средства бюджета муниципального округа"
+    ws["AC10"] = "Средства бюджета субъекта РФ"
+    ws["AD10"] = "Средства бюджета муниципального округа"
+    ws["B11"] = 1
+    ws["N11"] = 2
+    ws["P11"] = 3
+    ws["R11"] = 4
+    ws["T11"] = 5
+    ws["V11"] = 6
+    ws["W11"] = 7
+    ws["X11"] = 8
+    ws["Y11"] = 9
+    ws["Z11"] = 10
+    ws["AA11"] = 11
+    ws["AB11"] = 12
+    ws["AC11"] = 13
+    ws["AD11"] = 14
+
+    ws["C12"] = 'Муниципальная программа "Развитие инженерной инфраструктуры"'
+    ws["N12"] = "1000000000"
+    ws["V12"] = 181000
+    ws["Y12"] = 304000
+    ws["AB12"] = 500000
+
+    ws["F20"] = "Реконструкция ВЗУ Птицефабрика"
+    ws["N20"] = "10102S4090"
+    ws["P20"] = "900100"
+    ws["R20"] = "101020100000000"
+    ws["T20"] = "1000010939.5327942989"
+    ws["V20"] = 17160000
+    ws["W20"] = 0
+    ws["X20"] = 17160000
+    ws["Y20"] = 65780000
+    ws["Z20"] = 0
+    ws["AA20"] = 65780000
+    ws["AB20"] = 500000
+    ws["AC20"] = 500000
+    ws["AD20"] = 0
+    wb.save(path)
+
+    parsed = parse_xlsx_finance_report(path)
+
+    assert parsed.target_years == [2026, 2027, 2028]
+    assert parsed.program_totals[2026] == Decimal("181000.00")
+    group = parsed.object_groups[0]
+    assert group.funding[(2026, BudgetSource.LOCAL_BUDGET)] == Decimal("17160000.00")
+    assert group.funding[(2027, BudgetSource.LOCAL_BUDGET)] == Decimal("65780000.00")
+    assert group.funding[(2028, BudgetSource.REGIONAL_BUDGET)] == Decimal("500000.00")
+
+
 def test_excel_parser_supports_plain_year_headers_and_activity_totals(tmp_path):
     path = tmp_path / "activity_budget_roster.xlsx"
     wb = Workbook()

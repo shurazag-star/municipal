@@ -179,6 +179,10 @@ def _detect_header(worksheet) -> Tuple[int, Dict[int, str]]:
             for candidate in worksheet.iter_rows(min_row=header_start + 1, max_row=header_start + 4, values_only=False):
                 candidate_texts = ["" if cell.value is None else str(cell.value).strip() for cell in candidate]
                 filled = [text for text in candidate_texts if text]
+                if _looks_like_year_header_row(candidate_texts):
+                    header_rows.append(candidate)
+                    data_start = candidate[0].row + 1
+                    continue
                 if filled and all(_is_header_number(text) for text in filled):
                     data_start = candidate[0].row + 1
                     break
@@ -206,6 +210,18 @@ def _detect_header(worksheet) -> Tuple[int, Dict[int, str]]:
 
 def _is_header_number(text: str) -> bool:
     return str(text).strip().isdigit()
+
+
+def _looks_like_year_header_row(texts: Iterable[str]) -> bool:
+    return any(_looks_like_year_header_cell(text) for text in texts)
+
+
+def _looks_like_year_header_cell(text: str) -> bool:
+    normalized = str(text).strip().lower().replace("ё", "е")
+    normalized = re.sub(r"\s+", " ", normalized)
+    if re.fullmatch(r"20\d{2}(?:\s*(?:г|год|года))?", normalized):
+        return True
+    return bool(re.search(r"\bплан\s+на\s+(?:20\d{2}|[123]\s*год)", normalized))
 
 
 def _merged_cell_value(cell):

@@ -5659,3 +5659,52 @@
 
 - В локальном сравнении с эталонным DOCX остались косметические отличия формата нулей в некоторых новых строках (`0,00` вместо `0,0`); post-export validator и финансовые суммы это не блокируют.
 - В локальной development DB созданы несколько debug-организаций `Локальная Шатура debug` для end-to-end воспроизведения; production они не затрагивают.
+
+## 2026-06-11 09:22:49 MSK — Shatura Excel header parsing recovery
+
+### Выполнено
+
+- Разобран production-симптом в кабинете Шатуры без изменения данных Люберец.
+- Через Shatura admin UI подтверждено состояние:
+  - загружены `28.10.2025_2489-ПА_Порядок_МП_с_2026.pdf`, `проект изменений МП_май_2026.docx`, `Отчет о финанс. мероп. цел. прогр.№10 на 09.06.2026.xlsx`;
+  - Excel имеет `38` групп объектов, но `Годы: не определены`;
+  - проекты изменений по текущему набору не созданы.
+- Исправлен разбор Excel-заголовков, где отдельная строка `2026 / 2027 / 2028` ошибочно могла приниматься за служебную нумерацию колонок и отбрасываться.
+- Добавлен self-healing перед анализом: если уже загруженный Excel имеет группы объектов, но не имеет `target_years` и funding entries, `AnalysisSessionRunner` перепарсит прикрепленный файл новым parser_worker перед сопоставлением.
+- Улучшена диагностика агента: случай “группы есть, но годовые колонки/суммы не распознаны” теперь отличается от реального “не сопоставилось с Word”.
+
+### Измененные файлы
+
+- `parser_worker/municipal_agent/excel_parser.py`
+- `parser_worker/tests/test_excel_parser_fixture.py`
+- `rails_app/app/services/analysis_session_runner.rb`
+- `rails_app/app/services/agent_response_composer.rb`
+- `rails_app/app/services/agent_tool_registry.rb`
+- `rails_app/test/services/analysis_session_runner_test.rb`
+- `rails_app/test/services/agent_response_composer_test.rb`
+
+### Проверки
+
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests/test_excel_parser_fixture.py -q` -> `5 passed`.
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests -q` -> `66 passed`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test test/services/analysis_session_runner_test.rb test/services/agent_response_composer_test.rb'` -> `21 runs, 171 assertions, 0 failures, 0 errors`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test test/services/agent_tool_registry_test.rb test/services/analysis_session_runner_test.rb test/services/external_source_matcher_test.rb test/services/agent_response_composer_test.rb'` -> `59 runs, 323 assertions, 0 failures, 0 errors`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test'` -> `304 runs, 1937 assertions, 0 failures, 0 errors`.
+
+### Запуски и процессы
+
+- Для Rails-тестов был запущен Docker Desktop и одноразовые `web-run` контейнеры.
+- После тестов выполнено `docker-compose stop sidekiq web parser_worker postgres redis`; `docker-compose ps` пустой.
+- Shatura admin UI проверялся через обычный HTTP login с секретами из `~/.codex/secrets/municipal-shatura.env`; значения секретов не выводились и не записывались в репозиторий.
+
+### Результат
+
+- Новый класс Excel-отчетов с отдельной строкой годов теперь должен разбираться в target years и funding entries.
+- Уже загруженный в Шатуру Excel должен быть автоматически перепарсен при следующем запуске анализа после деплоя, без ручного удаления/повторной загрузки файла.
+- Люберцы не изменялись; проверка Шатуры выполнялась в рамках отдельного tenant.
+
+### Риски и замечания
+
+- Railway CLI/MCP login на момент проверки истек (`invalid_grant` / Unauthorized), поэтому production runner и runtime logs недоступны до повторного `railway login`.
+- Без production runner нельзя прямо сейчас принудительно перепарсить документ #88; для этого добавлен self-healing при следующем запуске анализа в интерфейсе.
+- Если новый Excel отличается не только отдельной строкой годов, а еще и неизвестными названиями бюджетных источников, после деплоя может потребоваться дополнительный parser-fixture по самому файлу.

@@ -1,9 +1,10 @@
 class AnalysisSessionRunner
   CHANGE_SOURCE_TYPES = %w[xlsx_finance pdf_agreement].freeze
 
-  def initialize(analysis_session)
+  def initialize(analysis_session, parser_worker_client: ParserWorkerClient.new)
     @analysis_session = analysis_session
     @organization = analysis_session.organization
+    @parser_worker_client = parser_worker_client
   end
 
   def run!
@@ -48,6 +49,7 @@ class AnalysisSessionRunner
 
   def match_documents(documents, unsupported_sources)
     Array(documents).flat_map do |document|
+      document = refresh_stale_xlsx_payload(document)
       if supported_source?(document)
         results = ExternalSourceMatcher.new(analysis_session: @analysis_session, source_document: document).match!
         unsupported_sources << unsupported_source_summary(document) if results.empty? && document.pdf_agreement?
@@ -57,6 +59,34 @@ class AnalysisSessionRunner
         []
       end
     end
+  end
+
+  def refresh_stale_xlsx_payload(document)
+    return document unless stale_xlsx_payload?(document)
+
+    payload = @parser_worker_client.parse(document)
+    document.update!(status: "parsed", parsed_payload: payload || {})
+    document.reload
+  rescue StandardError => error
+    Rails.logger.warn(
+      "xlsx_payload_refresh_failed " \
+      "organization_id=#{@organization.id} " \
+      "source_document_id=#{document.id} " \
+      "error=#{error.class.name}: #{error.message}"
+    )
+    document
+  end
+
+  def stale_xlsx_payload?(document)
+    return false unless document.xlsx_finance? && document.status == "parsed"
+    return false unless document.file_attachment.attached?
+
+    payload = document.parsed_payload || {}
+    object_groups = Array(payload["object_groups"])
+    return false if object_groups.empty?
+    return false if Array(payload["target_years"]).any?
+
+    object_groups.sum { |group| group.fetch("funding", {}).to_h.size }.zero?
   end
 
   def selected_source_documents

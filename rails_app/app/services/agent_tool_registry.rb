@@ -1392,6 +1392,8 @@ class AgentToolRegistry
       "source_document_type" => source_document&.document_type,
       "filename" => source_document&.filename,
       "object_groups_count" => Array(payload["object_groups"]).size,
+      "target_years_count" => Array(payload["target_years"]).size,
+      "funding_entries_count" => Array(payload["object_groups"]).sum { |group| group.fetch("funding", {}).to_h.size },
       "program_totals_count" => payload["program_totals"].to_h.size,
       "final_totals_count" => payload["final_totals"].to_h.size,
       "matched_count" => summary["matched_count"].to_i,

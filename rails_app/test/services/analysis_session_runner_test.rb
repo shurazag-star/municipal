@@ -155,7 +155,77 @@ class AnalysisSessionRunnerTest < ActiveSupport::TestCase
     assert_equal ["xlsx_finance", "pdf_agreement"].sort, session.summary["source_conflicts"].first["sources"].keys.sort
   end
 
+  test "refreshes stale Excel payload with object groups but no year funding before matching" do
+    stale = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "sheet_name" => "Результат",
+        "object_groups" => [
+          {
+            "group_key" => "01::1000004207.1000005123::ВЗУ Черусти",
+            "status" => "GROUPED_OBJECT",
+            "funding" => {},
+            "rows" => [
+              {
+                "row_number" => 61,
+                "row_type" => "OBJECT_LEAF_ROW",
+                "parent_activity_code" => "01",
+                "object_code" => "1000004207.1000005123",
+                "object_name" => "ВЗУ Черусти",
+                "funding" => {},
+                "raw_values" => { "Наименование объекта" => "ВЗУ Черусти" }
+              }
+            ]
+          }
+        ],
+        "target_years" => []
+      }
+    )
+    stale.file_attachment.attach(
+      io: StringIO.new("xlsx"),
+      filename: "finance.xlsx",
+      content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    session = AnalysisSession.create!(
+      organization: @organization,
+      user: @user,
+      program_version: @version,
+      goal: "Провести анализ",
+      selected_source_document_ids: [stale.id]
+    )
+    parser = FakeParserClient.new(
+      excel_payload("ВЗУ Черусти", "1000004207.1000005123", "2026::LOCAL_BUDGET" => "150.00")
+    )
+
+    assert_difference "ChangeSet.count", 1 do
+      AnalysisSessionRunner.new(session, parser_worker_client: parser).run!
+    end
+
+    assert_equal [stale.id], parser.parsed_document_ids
+    assert_equal [2026], stale.reload.parsed_payload["target_years"]
+    assert_equal 1, session.reload.summary["matched_count"]
+    assert_equal 1, session.summary["change_items_count"]
+  end
+
   private
+
+  class FakeParserClient
+    attr_reader :parsed_document_ids
+
+    def initialize(payload)
+      @payload = payload
+      @parsed_document_ids = []
+    end
+
+    def parse(document)
+      @parsed_document_ids << document.id
+      @payload
+    end
+  end
 
   def excel_document!(object_name, object_code, funding)
     SourceDocument.create!(
@@ -186,5 +256,30 @@ class AnalysisSessionRunnerTest < ActiveSupport::TestCase
         ]
       }
     )
+  end
+
+  def excel_payload(object_name, object_code, funding)
+    {
+      "sheet_name" => "Результат",
+      "target_years" => [2026],
+      "object_groups" => [
+        {
+          "group_key" => "01::#{object_code}::#{object_name}",
+          "status" => "GROUPED_OBJECT",
+          "funding" => funding,
+          "rows" => [
+            {
+              "row_number" => 61,
+              "row_type" => "OBJECT_LEAF_ROW",
+              "parent_activity_code" => "01",
+              "object_code" => object_code,
+              "object_name" => object_name,
+              "funding" => funding,
+              "raw_values" => { "Наименование объекта" => object_name }
+            }
+          ]
+        }
+      ]
+    }
   end
 end

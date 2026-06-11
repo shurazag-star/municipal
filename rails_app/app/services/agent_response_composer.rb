@@ -158,7 +158,12 @@ class AgentResponseComposer
         end
       else
         diagnostics = @tool_result["diagnostics"] || {}
-        if diagnostics["source_document_type"] == "xlsx_finance" && diagnostics["object_groups_count"].to_i.zero?
+        if diagnostics["source_document_type"] == "xlsx_finance" &&
+            diagnostics["object_groups_count"].to_i.positive? &&
+            diagnostics["target_years_count"].to_i.zero? &&
+            diagnostics["funding_entries_count"].to_i.zero?
+          base("Я проанализировал документы, но проект изменений не создан: Excel-файл вижу и строки мероприятий выделены, однако годовые колонки и суммы финансирования не распознаны. Нужно исправить разбор заголовка Excel, иначе новая редакция будет пустой.")
+        elsif diagnostics["source_document_type"] == "xlsx_finance" && diagnostics["object_groups_count"].to_i.zero?
           if diagnostics["program_totals_count"].to_i.zero?
             base("Я проанализировал документы, но проект изменений не создан: Excel-файл вижу, однако в нем не удалось выделить годовые суммы и строки мероприятий или объектов для сопоставления с Word-документом. Это ошибка разбора структуры Excel, а не отсутствие изменений.")
           else
