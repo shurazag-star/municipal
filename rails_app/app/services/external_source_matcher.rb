@@ -259,6 +259,9 @@ class ExternalSourceMatcher
       return uncertain_match(nil, "NEEDS_CONFIRMATION", "Найдено несколько объектов с таким наименованием", "0.5")
     end
 
+    global_exact_name_match = find_global_exact_name_match(group, normalized_name)
+    return global_exact_name_match if global_exact_name_match
+
     fuzzy_matches = ranked_fuzzy_matches(normalized_name, candidates: candidate_object_nodes(group))
     fuzzy = fuzzy_matches.first
     fuzzy_second = fuzzy_matches.second
@@ -425,6 +428,17 @@ class ExternalSourceMatcher
 
     candidate_object_nodes(group).detect do |node|
       [node.code, node.external_code, node.metadata["object_code"], node.metadata["external_code"]].compact.map(&:to_s).include?(code.to_s)
+    end
+  end
+
+  def find_global_exact_name_match(group, normalized_name)
+    return nil if group["object_code"].present? || normalized_name.blank?
+
+    matches = object_nodes.select { |node| normalized_node_name(node) == normalized_name }
+    if matches.one?
+      exact_match(matches.first, "MATCH_EXACT_NAME_GLOBAL", "Найдено точное совпадение по наименованию вне кода родительского мероприятия")
+    elsif matches.many?
+      uncertain_match(nil, "NEEDS_CONFIRMATION", "Найдено несколько объектов с таким наименованием", "0.5")
     end
   end
 

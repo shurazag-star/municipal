@@ -5761,3 +5761,64 @@
 ### Риски и замечания
 
 - Нужно после deploy повторить production-сценарий Шатуры и убедиться, что `ChangeSet` создается; на момент этой записи код еще не задеплоен после второй parser-правки.
+
+## 2026-06-11 10:11:54 MSK — Shatura exact-name fallback and rating row filter
+
+### Выполнено
+
+- Задеплоена parser-правка для `текущий финансовый год`:
+  - `municipal-web` deployment `c9791bc3-afdb-4472-aefa-c54c457f22b5` — `SUCCESS`;
+  - `municipal-worker` deployment `4631221b-5d07-4837-aa03-da643e44349a` — `SUCCESS`.
+- Повторен production-сценарий Шатуры через worker login и сообщение `все загрузил, разбери все файлы`.
+- Подтверждено, что прежняя ошибка `ни одна строка Excel не сопоставилась` устранена:
+  - Excel #88 перепарсен в production как `target_years=[2026]`;
+  - `object_groups=47`, `funding_cells=65`;
+  - создан `ChangeSet #50`;
+  - агент сопоставил `62` строки и не исключил ни одной.
+- Найдены два оставшихся уточнения:
+  - объект `Строительство БМК мощностью 6 МВт ... с. Пышлицы` уже есть в Word, но Excel parent code ведет к другому мероприятию;
+  - строка `РЕЙТИНГ` является служебной строкой отчета и не должна становиться новым объектом.
+- Исправлен matcher:
+  - при пустом `object_code` разрешен fallback на точное совпадение имени по всему дереву программы;
+  - при наличии `object_code` старое ограничение по parent activity сохранено.
+- Исправлен Excel parser:
+  - строка с object name `РЕЙТИНГ` исключается из object groups.
+- Добавлены регрессионные тесты на оба случая.
+
+### Измененные файлы
+
+- `rails_app/app/services/external_source_matcher.rb`
+- `rails_app/test/services/external_source_matcher_test.rb`
+- `parser_worker/municipal_agent/excel_parser.py`
+- `parser_worker/tests/test_excel_parser_fixture.py`
+- `WORKLOG.md`
+
+### Проверки
+
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests/test_excel_parser_fixture.py -q` -> `6 passed`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test test/services/external_source_matcher_test.rb'` -> `27 runs, 95 assertions, 0 failures, 0 errors`.
+- Локальный разбор production Excel `/tmp/municipal_shatura_source_88.xlsx` после правки:
+  - `target_years=[2026]`;
+  - `object_groups=46`;
+  - `funding_cells=64`;
+  - `rating_groups=[]`.
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests -q` -> `67 passed`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test'` -> `305 runs, 1940 assertions, 0 failures, 0 errors`.
+- `git diff --check` -> clean.
+
+### Запуски и процессы
+
+- Docker Compose поднимал `postgres`, `redis`, `parser_worker` и временные `web-run` контейнеры для тестов.
+- После тестов выполнено `docker-compose stop sidekiq web parser_worker postgres redis`.
+- Production диагностика выполнялась через `railway ssh` в `municipal-web`; секреты не выводились.
+
+### Результат
+
+- После следующего deploy Шатура должна получать `ChangeSet` без двух оставшихся уточнений:
+  - Пышлицы будут сопоставляться с существующим объектом по exact name;
+  - `РЕЙТИНГ` не попадет в проект изменений.
+- Люберцы не изменялись.
+
+### Риски и замечания
+
+- После deploy нужно еще раз запустить production-сценарий Шатуры и подтвердить `needs_clarification_count=0`, затем сформировать/проверить финальную редакцию.

@@ -767,6 +767,49 @@ class ExternalSourceMatcherTest < ActiveSupport::TestCase
     assert document.match_candidates.sole.requires_user_confirmation
   end
 
+  test "uses global exact name fallback for Excel rows without object code" do
+    subprogram = @version.program_nodes.create!(
+      node_type: "subprogram",
+      name: "Подпрограмма 1",
+      display_number: "1"
+    )
+    main_activity = @version.program_nodes.create!(
+      parent: subprogram,
+      node_type: "main_activity",
+      name: "Основное мероприятие 03",
+      display_number: "3",
+      code: "03"
+    )
+    activity = @version.program_nodes.create!(
+      parent: main_activity,
+      node_type: "activity",
+      name: "Мероприятие 03.04",
+      display_number: "3.4",
+      code: "03.04"
+    )
+    object = @version.program_nodes.create!(
+      parent: activity,
+      node_type: "object",
+      name: "Строительство БМК мощностью 6 МВт по адресу: Московская область, г.о. Шатура, с. Пышлицы (в т.ч. ПИР)",
+      normalized_name: "строительство бмк мощностью 6 мвт по адресу московская область г о шатура с пышлицы в т ч пир",
+      display_number: "1.3.4"
+    )
+    document = excel_document!(
+      object_name: object.name,
+      object_code: "",
+      row_number: 35,
+      parent_activity_code: "103012900000000",
+      funding: { "2026::LOCAL_BUDGET" => "1358271.66" }
+    )
+    session = analysis_session!(document)
+
+    results = ExternalSourceMatcher.new(analysis_session: session, source_document: document).match!
+
+    assert_equal object, results.first.program_node
+    assert_equal "MATCH_EXACT_NAME_GLOBAL", document.match_candidates.sole.match_status
+    assert_not document.match_candidates.sole.requires_user_confirmation
+  end
+
   test "matches shortened Excel object name to existing object under the same parent activity" do
     subprogram = @version.program_nodes.create!(
       node_type: "subprogram",

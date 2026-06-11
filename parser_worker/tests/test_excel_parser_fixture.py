@@ -223,6 +223,11 @@ def test_excel_parser_supports_current_financial_year_plan_columns(tmp_path):
     ws["K18"] = 90_555_380
     ws["N18"] = 78_330_390
     ws["O18"] = 12_224_990
+    ws["F110"] = "108011100000000"
+    ws["G110"] = "РЕЙТИНГ"
+    ws["I110"] = "900100"
+    ws["K110"] = 9_801_000
+    ws["O110"] = 9_801_000
     wb.save(path)
 
     parsed = parse_xlsx_finance_report(path)
@@ -234,6 +239,7 @@ def test_excel_parser_supports_current_financial_year_plan_columns(tmp_path):
     assert group.funding[(2026, BudgetSource.REGIONAL_BUDGET)] == Decimal("78330390.00")
     assert group.funding[(2026, BudgetSource.LOCAL_BUDGET)] == Decimal("12224990.00")
     assert group.total_by_year()[2026] == Decimal("90555380.00")
+    assert all(group.object_name != "РЕЙТИНГ" for group in parsed.object_groups)
 
 
 def test_excel_parser_keeps_separate_year_header_row_before_numbering(tmp_path):

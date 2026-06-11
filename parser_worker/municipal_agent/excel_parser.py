@@ -99,6 +99,8 @@ def _group_identity(row: ExcelFinanceRow) -> Optional[Tuple[str, str, str, str]]
         return group_key, "UNASSIGNED_RESIDUAL", row.object_code.strip(), row.object_name.strip()
 
     if row.row_type == ExcelRowType.OBJECT_LEAF_ROW:
+        if _service_object_row(row):
+            return None
         object_name = row.object_name.strip()
         object_code = row.object_code.strip()
         object_identity = object_code or normalize_name(object_name)
@@ -117,6 +119,10 @@ def _group_identity(row: ExcelFinanceRow) -> Optional[Tuple[str, str, str, str]]
 
 def _activity_total_row(row: ExcelFinanceRow) -> bool:
     return bool(row.parent_activity_code.strip()) and bool(row.funding) and not _kosgu_value_present(row.raw_values)
+
+
+def _service_object_row(row: ExcelFinanceRow) -> bool:
+    return normalize_name(row.object_name) in {"рейтинг"}
 
 
 def _kosgu_value_present(values: Mapping[str, object]) -> bool:
