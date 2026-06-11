@@ -211,6 +211,58 @@ class AnalysisSessionRunnerTest < ActiveSupport::TestCase
     assert_equal 1, session.summary["change_items_count"]
   end
 
+  test "refreshes stale Excel payload containing service rating group" do
+    stale = SourceDocument.create!(
+      organization: @organization,
+      created_by: @user,
+      document_type: "xlsx_finance",
+      filename: "Финансы.xlsx",
+      status: "parsed",
+      parsed_payload: {
+        "sheet_name" => "Результат",
+        "object_groups" => [
+          {
+            "group_key" => "108011100000000::рейтинг::рейтинг",
+            "status" => "GROUPED_OBJECT",
+            "object_name" => "РЕЙТИНГ",
+            "funding" => { "2026::LOCAL_BUDGET" => "9801000.00" },
+            "rows" => [
+              {
+                "row_number" => 110,
+                "row_type" => "OBJECT_LEAF_ROW",
+                "parent_activity_code" => "108011100000000",
+                "object_name" => "РЕЙТИНГ",
+                "funding" => { "2026::LOCAL_BUDGET" => "9801000.00" }
+              }
+            ]
+          }
+        ],
+        "target_years" => [2026]
+      }
+    )
+    stale.file_attachment.attach(
+      io: StringIO.new("xlsx"),
+      filename: "finance.xlsx",
+      content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    session = AnalysisSession.create!(
+      organization: @organization,
+      user: @user,
+      program_version: @version,
+      goal: "Провести анализ",
+      selected_source_document_ids: [stale.id]
+    )
+    parser = FakeParserClient.new(
+      excel_payload("ВЗУ Черусти", "1000004207.1000005123", "2026::LOCAL_BUDGET" => "150.00")
+    )
+
+    AnalysisSessionRunner.new(session, parser_worker_client: parser).run!
+
+    assert_equal [stale.id], parser.parsed_document_ids
+    assert_equal "ВЗУ Черусти", stale.reload.parsed_payload.dig("object_groups", 0, "rows", 0, "object_name")
+    assert_equal 1, session.reload.summary["matched_count"]
+  end
+
   private
 
   class FakeParserClient

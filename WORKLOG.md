@@ -5822,3 +5822,43 @@
 ### Риски и замечания
 
 - После deploy нужно еще раз запустить production-сценарий Шатуры и подтвердить `needs_clarification_count=0`, затем сформировать/проверить финальную редакцию.
+
+## 2026-06-11 10:17:19 MSK — Shatura stale rating payload self-healing
+
+### Выполнено
+
+- Перед production-проверкой выявлено, что документ #88 уже был перепарсен промежуточной версией parser worker:
+  - `target_years` уже заполнены;
+  - self-healing по пустым годам больше не сработал бы;
+  - старый parsed payload все еще мог содержать служебную группу `РЕЙТИНГ`.
+- Добавлен дополнительный критерий stale Excel payload:
+  - если parsed `object_groups` содержат object name `РЕЙТИНГ`, `AnalysisSessionRunner` перепарсит прикрепленный Excel перед матчингом.
+- Добавлен тест на payload с `target_years=[2026]`, но со старой группой `РЕЙТИНГ`.
+
+### Измененные файлы
+
+- `rails_app/app/services/analysis_session_runner.rb`
+- `rails_app/test/services/analysis_session_runner_test.rb`
+- `WORKLOG.md`
+
+### Проверки
+
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests/test_excel_parser_fixture.py -q` -> `6 passed`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test test/services/analysis_session_runner_test.rb test/services/external_source_matcher_test.rb'` -> `33 runs, 124 assertions, 0 failures, 0 errors`.
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests -q` -> `67 passed`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test'` -> `306 runs, 1943 assertions, 0 failures, 0 errors`.
+- `git diff --check` -> clean.
+
+### Запуски и процессы
+
+- Docker Compose поднимал `postgres`, `redis`, `parser_worker` и временные `web-run` контейнеры.
+- После тестов выполнено `docker-compose stop sidekiq web parser_worker postgres redis`.
+
+### Результат
+
+- Уже загруженный production Excel Шатуры должен перепарситься новым parser worker при следующем анализе без ручной перезагрузки файла.
+- Люберцы не изменялись.
+
+### Риски и замечания
+
+- Требуется финальный deploy этой корректировки и повторный production smoke по Шатуре.

@@ -84,9 +84,24 @@ class AnalysisSessionRunner
     payload = document.parsed_payload || {}
     object_groups = Array(payload["object_groups"])
     return false if object_groups.empty?
+    return true if object_groups.any? { |group| service_xlsx_object_group?(group) }
     return false if Array(payload["target_years"]).any?
 
     object_groups.sum { |group| group.fetch("funding", {}).to_h.size }.zero?
+  end
+
+  def service_xlsx_object_group?(group)
+    names = [
+      group["object_name"],
+      group.dig("rows", 0, "object_name"),
+      group.dig("rows", 0, "raw_values", "Наименование объекта"),
+      group.dig("rows", 0, "raw_values", "Наименование Объекта по АП")
+    ]
+    names.any? { |name| normalize_stale_group_name(name) == "рейтинг" }
+  end
+
+  def normalize_stale_group_name(value)
+    value.to_s.downcase.tr("ё", "е").gsub(/[^\p{Alnum}]+/, " ").squeeze(" ").strip
   end
 
   def selected_source_documents
