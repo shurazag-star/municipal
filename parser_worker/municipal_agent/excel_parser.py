@@ -133,7 +133,8 @@ def parse_xlsx_finance_report(path: str | Path) -> ParsedExcelReport:
     worksheet = workbook[sheet_name]
 
     data_start_row, headers = _detect_header(worksheet)
-    amount_columns = _detect_amount_columns(headers, base_year=_infer_relative_plan_base_year(worksheet))
+    base_year = _infer_relative_plan_base_year(worksheet) or _infer_year_from_path(path)
+    amount_columns = _detect_amount_columns(headers, base_year=base_year)
     rows: List[ExcelFinanceRow] = []
     program_totals: Dict[int, Decimal] = {}
     final_totals: Dict[int, Decimal] = {}
@@ -315,13 +316,17 @@ def _detect_amount_columns(headers: Mapping[int, str], base_year: Optional[int] 
         match = re.search(r"(20\d{2})", text)
         if match:
             current_year = int(match.group(1))
+        current_year_match = _looks_like_current_financial_year_header(text) and base_year is not None
+        if not match and current_year_match:
+            current_year = base_year
         relative_match = re.search(r"план\s+на\s+([123])\s*год", text)
         if not match and relative_match and base_year is not None:
             current_year = base_year + int(relative_match.group(1)) - 1
         source = normalize_budget_source(text)
-        if match and "всего" in text:
+        year_header = match or relative_match or current_year_match
+        if year_header and "всего" in text:
             columns[idx] = (current_year, None, False)
-        elif (match or relative_match) and _looks_like_plan_total_header(text):
+        elif year_header and _looks_like_plan_total_header(text):
             columns[idx] = (current_year, None, True)
         elif match and _looks_like_plain_year_total_header(text):
             columns[idx] = (current_year, None, False)
@@ -338,6 +343,15 @@ def _infer_relative_plan_base_year(worksheet) -> Optional[int]:
         for value in row_cells:
             years.extend(int(match) for match in re.findall(r"20\d{2}", "" if value is None else str(value)))
     return max(years) if years else None
+
+
+def _infer_year_from_path(path: str | Path) -> Optional[int]:
+    years = [int(match) for match in re.findall(r"20\d{2}", str(path))]
+    return max(years) if years else None
+
+
+def _looks_like_current_financial_year_header(text: str) -> bool:
+    return "текущий финансовый год" in text
 
 
 def _looks_like_plan_total_header(text: str) -> bool:

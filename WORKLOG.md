@@ -5708,3 +5708,56 @@
 - Railway CLI/MCP login на момент проверки истек (`invalid_grant` / Unauthorized), поэтому production runner и runtime logs недоступны до повторного `railway login`.
 - Без production runner нельзя прямо сейчас принудительно перепарсить документ #88; для этого добавлен self-healing при следующем запуске анализа в интерфейсе.
 - Если новый Excel отличается не только отдельной строкой годов, а еще и неизвестными названиями бюджетных источников, после деплоя может потребоваться дополнительный parser-fixture по самому файлу.
+
+## 2026-06-11 10:01:32 MSK — Shatura current-year Excel columns
+
+### Выполнено
+
+- После повторного Railway login выполнен production deploy предыдущей правки:
+  - `municipal-web` deployment `aa74797e-0aa5-414c-8a26-bf4f9cdd62e8` — `SUCCESS`;
+  - `municipal-worker` deployment `831320c8-d9e5-42c3-8680-ce34332883b5` — `SUCCESS`.
+- Через worker login Шатуры повторен сценарий `все загрузил, разбери все файлы`; Люберцы не трогались.
+- Production read-only диагностика по Шатуре показала настоящую причину:
+  - `SourceDocument #88` имел `object_groups=38`, но `target_years=[]` и `funding_cells=0`;
+  - Excel содержит колонки `Всего на текущий финансовый год`, `средства бюджета субъекта`, `средства местного бюджета` без явного `2026` в самих финансовых заголовках;
+  - отчетная дата `по 09 июня 2026 г.` есть в верхней части листа.
+- Скачан production Excel `SourceDocument #88` во временный файл `/tmp/municipal_shatura_source_88.xlsx` для локальной диагностики парсера.
+- Исправлен parser worker:
+  - `текущий финансовый год` теперь привязывается к `base_year`;
+  - `base_year` берется из верхней части листа, а если там нет года — из имени файла;
+  - последующие колонки бюджетных источников получают этот же год.
+- Добавлен регрессионный тест на шапку формата `Отчет о финансировании мероприятий целевых программ / по 09 июня 2026 г. / Всего на текущий финансовый год`.
+
+### Измененные файлы
+
+- `parser_worker/municipal_agent/excel_parser.py`
+- `parser_worker/tests/test_excel_parser_fixture.py`
+- `WORKLOG.md`
+
+### Проверки
+
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests/test_excel_parser_fixture.py -q` -> `6 passed`.
+- Локальный разбор production Excel `/tmp/municipal_shatura_source_88.xlsx` после правки:
+  - `target_years=[2026]`;
+  - `program_totals[2026]=2155969664.33`;
+  - `object_groups=47`;
+  - `funding_cells=65`.
+- `PYTHONPATH=parser_worker .venv/bin/pytest parser_worker/tests -q` -> `67 passed`.
+- `docker-compose run --rm -e RAILS_ENV=test -e DATABASE_URL=postgres://postgres:postgres@postgres:5432/municipal_agent_test web bash -lc 'bundle exec ruby bin/rails test'` -> `304 runs, 1937 assertions, 0 failures, 0 errors`.
+- `git diff --check` -> clean.
+
+### Запуски и процессы
+
+- Для Rails-тестов Docker Compose поднял `postgres`, `redis`, `parser_worker` и временный `web-run` контейнер.
+- После тестов выполнено `docker-compose stop sidekiq web parser_worker postgres redis`; поднятые контейнеры остановлены.
+- Production диагностика выполнялась через `railway ssh` в `municipal-web`; секреты не выводились.
+
+### Результат
+
+- На реальном Excel Шатуры parser worker теперь извлекает финансовые суммы и год `2026`.
+- Следующий deploy web/worker должен дать self-healing: уже загруженный документ #88 будет перепарсен при новом анализе без повторной загрузки файла.
+- Люберцы не изменялись.
+
+### Риски и замечания
+
+- Нужно после deploy повторить production-сценарий Шатуры и убедиться, что `ChangeSet` создается; на момент этой записи код еще не задеплоен после второй parser-правки.

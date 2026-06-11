@@ -184,6 +184,58 @@ def test_excel_parser_supports_relative_budget_roster_plan_years(tmp_path):
     assert group.funding[(2028, BudgetSource.REGIONAL_BUDGET)] == Decimal("500000.00")
 
 
+def test_excel_parser_supports_current_financial_year_plan_columns(tmp_path):
+    path = tmp_path / "Отчет о финанс. мероп. цел. прогр.№10 на 09.06.2026.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Результат"
+    ws["A1"] = "Отчет о финансировании мероприятий целевых программ"
+    ws["A2"] = "по 09 июня 2026 г."
+    ws["A6"] = "Наименование"
+    ws["B6"] = "Классификация"
+    ws["F6"] = "Мероприятие"
+    ws["G6"] = "Наименование Объекта по АП"
+    ws["I6"] = "Тип средств"
+    ws["K6"] = "Утверждено плановые назначения"
+    ws["Q6"] = "Поставлено на учет БО (заключено контрактов, договоров)"
+    ws["R6"] = "Фактически исполнено"
+    ws["U6"] = "Свободных ЛБО"
+    ws["B7"] = "Код цел. программы._x000D_\nКод мероприятия"
+    ws["K7"] = "Всего на текущий финансовый год"
+    ws["R7"] = "Всего"
+    ws["N8"] = "средства бюджета субъекта"
+    ws["O8"] = "средства местного бюджета"
+    ws["S8"] = "средства бюджета субъекта"
+    ws["T8"] = "средства местного бюджета"
+    for idx, col in enumerate(["A", "B", "C", "D", "E", "F", "G", "I", "K", "N", "O", "Q", "R", "S", "T", "U"], 1):
+        ws[f"{col}9"] = idx
+
+    ws["A10"] = '10 - Муниципальная программа "Развитие инженерной инфраструктуры"'
+    ws["K10"] = 2_155_969_664.33
+    ws["N10"] = 1_760_494_100
+    ws["O10"] = 438_124_644.33
+
+    ws["A18"] = "Строительство ВЗУ со станцией водоочистки"
+    ws["B18"] = "10102S4090"
+    ws["F18"] = "101020100000000"
+    ws["G18"] = "Строительство ВЗУ со станцией водоочистки и разводящими сетями водоснабжения г.о. Шатура, р.п. Черусти"
+    ws["I18"] = "900100"
+    ws["K18"] = 90_555_380
+    ws["N18"] = 78_330_390
+    ws["O18"] = 12_224_990
+    wb.save(path)
+
+    parsed = parse_xlsx_finance_report(path)
+
+    assert parsed.target_years == [2026]
+    assert parsed.program_totals[2026] == Decimal("2155969664.33")
+    group = parsed.object_groups[0]
+    assert group.parent_activity_code == "101020100000000"
+    assert group.funding[(2026, BudgetSource.REGIONAL_BUDGET)] == Decimal("78330390.00")
+    assert group.funding[(2026, BudgetSource.LOCAL_BUDGET)] == Decimal("12224990.00")
+    assert group.total_by_year()[2026] == Decimal("90555380.00")
+
+
 def test_excel_parser_keeps_separate_year_header_row_before_numbering(tmp_path):
     path = tmp_path / "separate_year_headers.xlsx"
     wb = Workbook()
